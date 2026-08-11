@@ -1,0 +1,10 @@
+[Unit]
+Description=Raspberry Pi 5 first-boot wired DHCP WAN and SSH setup
+After=vyos-router.service network.target
+Wants=network.target
+ConditionPathExists=!/config/.dhcp-wan-ssh-firstboot-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pi5-dhcp-wan-firstboot-wrapper.sh
+TimeoutStartSec=300

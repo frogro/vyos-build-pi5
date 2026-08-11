@@ -1,0 +1,19 @@
+interfaces {
+    loopback lo {
+    }
+}
+service {
+    ssh {
+        port "22"
+    }
+}
+system {
+    host-name "vyos"
+    login {
+        user vyos {
+            authentication {
+                plaintext-password "vyos"
+            }
+        }
+    }
+}

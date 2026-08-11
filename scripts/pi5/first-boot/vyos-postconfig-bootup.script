@@ -1,0 +1,5 @@
+#!/bin/sh
+# Intentionally empty.
+# The Raspberry Pi 5 wired DHCP WAN first-boot setup is handled by:
+#   pi5-dhcp-wan-firstboot.timer
+exit 0

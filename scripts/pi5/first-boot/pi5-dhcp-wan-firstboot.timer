@@ -1,0 +1,11 @@
+[Unit]
+Description=Delay Raspberry Pi 5 wired DHCP WAN first-boot setup
+
+[Timer]
+OnBootSec=60s
+OnUnitInactiveSec=30s
+Unit=pi5-dhcp-wan-firstboot.service
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
