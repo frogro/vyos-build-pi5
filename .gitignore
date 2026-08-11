@@ -1,0 +1,11 @@
+*.img
+*.img.xz
+*.iso
+*.tar
+*.tar.gz
+*.zip
+*.log
+work/
+tmp/
+out/
+output/
