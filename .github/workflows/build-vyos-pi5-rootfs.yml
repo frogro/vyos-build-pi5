@@ -1,0 +1,132 @@
+name: Build VyOS Pi5 RootFS (Rolling ARM64)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-rootfs:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout own repo
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: Checkout vyos-build (current rolling)
+        uses: actions/checkout@v4
+        with:
+          repository: vyos/vyos-build
+          path: vyos-build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            7zip \
+            7zip-standalone \
+            squashfs-tools \
+            xz-utils \
+            rsync \
+            util-linux
+
+      - name: Build VyOS build image (native ARM64)
+        run: |
+          cd vyos-build/docker
+          docker build -t vyos-build:rolling-arm64 .
+
+      - name: Build VyOS Rolling ARM64 generic image
+        run: |
+          cd vyos-build
+          docker run --rm --privileged \
+            --network host \
+            -v "$(pwd)":/vyos \
+            -w /vyos \
+            vyos-build:rolling-arm64 \
+            sudo ./build-vyos-image --architecture arm64 generic
+
+      - name: Locate VyOS ISO
+        id: iso
+        shell: bash
+        run: |
+          set -euo pipefail
+          ISO_FILE="$(find vyos-build/build -maxdepth 1 -type f -iname '*.iso' -print -quit)"
+          test -n "$ISO_FILE"
+          test -f "$ISO_FILE"
+          echo "file=$ISO_FILE" >> "$GITHUB_OUTPUT"
+          echo "VyOS ISO: $ISO_FILE"
+          ls -lh "$ISO_FILE"
+
+      - name: Extract fresh VyOS rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p iso-extract vyos-rootfs-fresh
+
+          7zz x \
+            "${{ steps.iso.outputs.file }}" \
+            -oiso-extract \
+            live/filesystem.squashfs \
+            -y
+
+          test -f iso-extract/live/filesystem.squashfs
+
+          sudo unsquashfs \
+            -f \
+            -d vyos-rootfs-fresh \
+            iso-extract/live/filesystem.squashfs
+
+          test -x vyos-rootfs-fresh/bin/bash
+          test -d vyos-rootfs-fresh/usr
+          test -d vyos-rootfs-fresh/etc
+
+      - name: Pack rootfs with Linux metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo tar \
+            --numeric-owner \
+            --acls \
+            --xattrs \
+            --xattrs-include='*' \
+            -czpf vyos-rootfs-fresh.tar.gz \
+            -C vyos-rootfs-fresh .
+
+          sudo chown "$(id -u):$(id -g)" vyos-rootfs-fresh.tar.gz
+
+          sha256sum vyos-rootfs-fresh.tar.gz > SHA256SUMS
+
+          {
+            echo "Git commit used for vyos/vyos-build:"
+            git -C vyos-build rev-parse HEAD
+            echo
+            echo "ISO:"
+            basename "${{ steps.iso.outputs.file }}"
+            echo
+            echo "Rootfs SHA256:"
+            cat SHA256SUMS
+          } > VYOS-ROOTFS-BUILD-INFO.txt
+
+          ls -lh \
+            vyos-rootfs-fresh.tar.gz \
+            SHA256SUMS \
+            VYOS-ROOTFS-BUILD-INFO.txt
+
+      - name: Upload fresh VyOS ARM64 rootfs
+        uses: actions/upload-artifact@v4
+        with:
+          name: vyos-pi5-rootfs-fresh
+          path: |
+            vyos-rootfs-fresh.tar.gz
+            SHA256SUMS
+            VYOS-ROOTFS-BUILD-INFO.txt
+          retention-days: 30
+          if-no-files-found: error
