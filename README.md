@@ -13,7 +13,6 @@
 - [First Boot and Login](#first-boot-and-login)
 - [Optional Helper Scripts](#optional-helper-scripts)
 - [Supported Hardware](#supported-hardware)
-- [Cellular Modems](#cellular-modems)
 - [Build from Source](#build-from-source)
 - [Build Design](#build-design)
 - [Releases](#releases)
@@ -312,13 +311,13 @@ The AP helper can configure:
 
 The helper discovers available Linux wireless PHYs and reads the capabilities reported by the kernel instead of depending only on one fixed adapter name or chipset.
 
-### Cellular modem
+### Configure a modem
 
 ```bash
 sudo /home/vyos/modem-connect.sh
 ```
 
-The modem helper provides cellular / WWAN setup, routing, failover, health monitoring and recovery.
+Modem support depends on the modem, transport, drivers, firmware, carrier, and APN.
 
 ---
 
@@ -384,109 +383,22 @@ The Armbian hardware base provides the Raspberry Pi kernel and Device Trees used
 
 Raspberry Pi 4 and Raspberry Pi 5 have different physical hardware capabilities, so device-specific results are documented in release notes where necessary.
 
----
 
-## Cellular Modems
+### Cellular modems
 
-The image includes:
+`modem-connect.sh` supports PCIe- and USB-attached modems through ModemManager using QMI or MBIM, as well as a raw AT/RNDIS fallback path.
 
-```text
-/home/vyos/modem-connect.sh
-```
+#### Included modem support
 
-Run the interactive modem setup with:
-
-```bash
-sudo /home/vyos/modem-connect.sh
-```
-
-`modem-connect.sh` supports multiple modem transports and connection backends, including:
-
-- ModemManager
-- native MBIM
-- native QMI
-- PCIe / MHI
-- USB
-- FM350 USB / AT-RNDIS
-- DHCP-style ECM/NCM/RNDIS modem interfaces
-- modem-specific FCC unlock
-- automatic modem discovery
-- WWAN fallback routing
-- NAT integration
-- connection health monitoring
-- automatic recovery
-- Ethernet / WWAN failover
-
-Modem families covered by the integration include:
-
-- Fibocom FM350-GL
+- Fibocom FM350-GL, including automatic FCC unlock over the AT port
 - Quectel RM505Q-AE
-- other compatible ModemManager / MBIM / QMI devices
+- Intel XMM7560-based modems
+- Other QMI- or MBIM-capable modems supported by ModemManager
 
-### FM350 USB / RNDIS
-
-On the tested Raspberry Pi 5 configuration, the onboard Ethernet interface is:
-
-```text
-eth0
-```
-
-and the Fibocom FM350 USB/RNDIS data interface enumerates as:
-
-```text
-eth1
-```
-
-The modem integration retains this native `eth1` interface instead of installing a persistent rename rule.
-
-FM350-specific support includes:
-
-- USB/RNDIS detection
-- dynamic AT-port detection
-- modem-specific FCC unlock
-- PDP activation
-- runtime IPv4 and gateway handling
-- fallback route metric management
-- RNDIS health monitoring
-- staged RNDIS recovery
-- controlled modem reconnect
-- USB re-enumeration handling
-
-### PCIe / MHI and ModemManager
-
-The integration also supports PCIe/MHI cellular devices through ModemManager.
-
-This path includes:
-
-- modem discovery
-- bearer creation
-- IPv4 configuration
-- WWAN route handling
-- bearer validation
-- stuck control-plane recovery
-- reconnect handling
-- persistent WWAN fallback priority
-
-### Ethernet / WWAN failover
-
-The networking policy keeps wired Ethernet preferred when it is available.
-
-Typical routing policy:
-
-```text
-Ethernet WAN
-preferred route
-        ↓
-WWAN
-fallback distance / metric 200
-```
-
-If the wired WAN is unavailable, the cellular connection can remain available as the fallback Internet path.
+Actual connectivity also depends on the SIM carrier, APN, regional firmware, and supported bands.
 
 > [!NOTE]
-> The modem integration is included in the Raspberry Pi 4 / Raspberry Pi 5 image so cellular hardware can be tested directly after installation.
->
-> Hardware-specific modem validation on Raspberry Pi 4 and Raspberry Pi 5 is documented separately in the corresponding release notes.
+> Cellular modem integration is included in the Raspberry Pi 4 / Raspberry Pi 5 image. Hardware-specific validation on Raspberry Pi 4 and Raspberry Pi 5 is documented in the corresponding release notes.
 
 ---
 
