@@ -323,145 +323,172 @@ Modem support depends on the modem, transport, drivers, firmware, carrier, and A
 
 ## Supported Hardware
 
-### Raspberry Pi boards
+### Wi-Fi adapters
 
-The build system targets:
+`ap-dhcp-wan-setup.sh` does not hard-code a specific chipset. It enumerates every `phy` under `/sys/class/ieee80211`, reads supported interface modes from the kernel with `iw phy <phy> info`, and only offers devices that report AP mode support.
 
-- **Raspberry Pi 4**
-- **Raspberry Pi 5**
+#### Known working hardware
 
-The Raspberry Pi-compatible boot environment, Linux kernel, Device Trees, overlays, kernel modules and firmware are supplied by the pinned Armbian hardware base.
+- Raspberry Pi 5 onboard Broadcom BCM43455 / `brcmfmac` — kernel driver, firmware loading, `wlan0`, PHY discovery, and AP configuration path have been verified
 
-The same VyOS userspace and image-integration process are used for both boards.
+A complete WPA2 client-connect validation is release-specific and is documented in the corresponding release notes before full AP operation is claimed as verified.
 
-### Ethernet
+#### Expected to work
 
-The first-boot configuration automatically discovers the wired Ethernet interface rather than relying on a fixed Raspberry Pi Ethernet MAC address.
+- Raspberry Pi 4 onboard Broadcom Wi-Fi with compatible Raspberry Pi kernel/firmware support
+- MediaTek MT7921-class M.2/PCIe Wi-Fi 6 adapters
+- Realtek RTL8852-class M.2/PCIe Wi-Fi 6 adapters
+- MediaTek MT7612U-based USB adapters
+- Other Linux `mac80211` adapters that advertise AP mode
 
-The selected interface receives:
-
-```text
-DHCP address
-default route
-VyOS WAN configuration
-SSH access
-```
-
-### Onboard Wi-Fi
-
-Raspberry Pi onboard wireless support uses the Raspberry Pi kernel, `brcmfmac` driver and Broadcom firmware supplied by the hardware base and firmware integration.
+Adapters whose drivers only support client or station mode cannot be used by the AP helper.
 
 Useful diagnostics:
 
 ```bash
+ip link show
 iw dev
 iw phy
-ip link show
 dmesg
 ```
-
-Wireless behavior can differ between Raspberry Pi 4 and Raspberry Pi 5 and between kernel/firmware revisions.
-
-### Additional Wi-Fi adapters
-
-The AP helper can use compatible Linux wireless adapters that advertise AP mode.
-
-The firmware-supplement mechanism covers network firmware families including:
-
-- Broadcom Raspberry Pi Wi-Fi
-- MediaTek Wi-Fi and Bluetooth
-- Realtek `rtw88`
-- Realtek `rtw89`
-- Intel `iwlwifi`
-- Intel Bluetooth
-
-Actual support depends on the hardware, kernel driver and firmware.
-
-### USB and PCIe
-
-The Armbian hardware base provides the Raspberry Pi kernel and Device Trees used for USB and PCIe support.
-
-Raspberry Pi 4 and Raspberry Pi 5 have different physical hardware capabilities, so device-specific results are documented in release notes where necessary.
-
 
 ### Cellular modems
 
 `modem-connect.sh` supports PCIe- and USB-attached modems through ModemManager using QMI or MBIM, as well as a raw AT/RNDIS fallback path.
 
-#### Included modem support
+#### Tested and confirmed working
 
-- Fibocom FM350-GL, including automatic FCC unlock over the AT port
+- Fibocom FM350-GL USB/RNDIS detection on Raspberry Pi 5, including native `eth1` enumeration through `rndis_host`
+
+#### Expected to work with compatible drivers and firmware
+
 - Quectel RM505Q-AE
 - Intel XMM7560-based modems
 - Other QMI- or MBIM-capable modems supported by ModemManager
 
-Actual connectivity also depends on the SIM carrier, APN, regional firmware, and supported bands.
+The integrated modem helper also contains FM350-specific FCC-unlock, routing, health-check, and recovery logic. Full cellular connectivity and failover validation on Raspberry Pi 4 / Raspberry Pi 5 is documented per release.
 
-> [!NOTE]
-> Cellular modem integration is included in the Raspberry Pi 4 / Raspberry Pi 5 image. Hardware-specific validation on Raspberry Pi 4 and Raspberry Pi 5 is documented in the corresponding release notes.
+Actual connectivity also depends on the SIM carrier, APN, regional firmware, supported bands, modem transport, kernel drivers, and firmware.
 
 ---
 
 ## Build from Source
 
-The complete build and integration sources are available in this repository.
+### Build with GitHub Actions
 
-The build system combines a fresh VyOS Rolling ARM64 userspace with a pinned Raspberry Pi hardware base.
-
-The automated build design is:
+The repository includes:
 
 ```text
-current VyOS Rolling source
-        ↓
-VyOS ARM64 root filesystem
-        +
-pinned Armbian Raspberry Pi hardware base
-        ↓
-Raspberry Pi 4 / Raspberry Pi 5 integration
-        ↓
-first-boot networking
-        ↓
-network firmware integration
-        ↓
-flashable disk image
-        ↓
-XZ compression
-        ↓
+.github/workflows/build-vyos-pi5-rootfs.yml
+```
+
+This workflow builds a fresh **VyOS Rolling ARM64 root filesystem** on a native ARM64 GitHub Actions runner.
+
+No local ARM64 VyOS build environment is required when using the GitHub Actions workflow.
+
+From the GitHub website:
+
+1. Fork or clone this repository.
+2. Open **Actions**.
+3. Select **Build VyOS Pi5 RootFS (Rolling ARM64)**.
+4. Click **Run workflow**.
+5. Select the `rolling` branch.
+6. Wait for the workflow to finish.
+7. Download the `vyos-pi5-rootfs-fresh` artifact.
+
+The artifact contains:
+
+```text
+vyos-rootfs-fresh.tar.gz
+SHA256SUMS
+VYOS-ROOTFS-BUILD-INFO.txt
+```
+
+### Build with GitHub CLI
+
+Authenticate and start the workflow:
+
+```bash
+gh auth login
+gh workflow run build-vyos-pi5-rootfs.yml --repo OWNER/vyos-build-pi5 --ref rolling
+sleep 5
+gh run list --repo OWNER/vyos-build-pi5 --workflow=build-vyos-pi5-rootfs.yml --limit 1
+```
+
+Watch the run:
+
+```bash
+gh run watch RUN_ID --repo OWNER/vyos-build-pi5 --exit-status
+```
+
+Download the completed artifact:
+
+```bash
+mkdir -p ~/Downloads/vyos-pi-RUN_ID
+gh run download RUN_ID \
+  --repo OWNER/vyos-build-pi5 \
+  --dir ~/Downloads/vyos-pi-RUN_ID
+```
+
+The fresh VyOS ARM64 root filesystem is normally located at:
+
+```text
+~/Downloads/vyos-pi-RUN_ID/vyos-pi5-rootfs-fresh/vyos-rootfs-fresh.tar.gz
+```
+
+Replace `OWNER` with your GitHub username and `RUN_ID` with the workflow run ID.
+
+### Assemble the Raspberry Pi image
+
+The final Raspberry Pi image is assembled from:
+
+1. the pinned Armbian Raspberry Pi hardware-base image;
+2. the fresh VyOS Rolling ARM64 root filesystem.
+
+The pinned hardware-base metadata is stored in:
+
+```text
+config/pi5-armbian-base.env
+```
+
+First merge the VyOS userspace with the Raspberry Pi kernel, modules, firmware, boot files, default configuration, and helper scripts:
+
+```bash
+sudo ./scripts/pi5/merge-vyos-pi5.sh \
+  /path/to/armbian-rpi.img.xz \
+  /path/to/vyos-rootfs-fresh.tar.gz \
+  ./out-pi
+```
+
+This creates:
+
+```text
+./out-pi/vyos-rootfs-pi5-merged.tar.gz
+./out-pi/pi5-base-manifest.txt
+```
+
+Then build the flashable disk image:
+
+```bash
+sudo ./scripts/pi5/build-vyos-pi5-image.sh \
+  /path/to/armbian-rpi.img.xz \
+  ./out-pi/vyos-rootfs-pi5-merged.tar.gz \
+  ./vyos-pi5-fresh.img
+```
+
+Compress the image and create the checksum file:
+
+```bash
+xz -T0 -9 -k ./vyos-pi5-fresh.img
+sha256sum ./vyos-pi5-fresh.img.xz > SHA256SUMS
+```
+
+The resulting release files are:
+
+```text
+vyos-pi5-fresh.img.xz
 SHA256SUMS
 ```
-
-The repository contains GitHub Actions automation for reproducible VyOS Rolling ARM64 builds and all scripts required to assemble the Raspberry Pi image.
-
-The pinned Armbian hardware base is defined in:
-
-```text
-config/pi5-armbian-base.env
-```
-
-The base definition records the exact release asset, version information and SHA-256 checksums used during image assembly.
-
-A hardware-base update is therefore an explicit repository change rather than a silent move to a different kernel or boot image.
-
-### Current repository build components
-
-Important build files include:
-
-```text
-.github/workflows/
-scripts/pi5/
-config/pi5-armbian-base.env
-```
-
-The Raspberry Pi integration scripts handle:
-
-- Armbian base validation
-- VyOS root filesystem merge
-- Raspberry Pi boot/kernel/module preservation
-- network firmware supplementation
-- first-boot helper injection
-- final disk-image generation
-- image validation
-- XZ compression and checksum generation
 
 ---
 
