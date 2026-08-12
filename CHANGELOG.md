@@ -41,4 +41,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Pinned the Raspberry Pi Armbian hardware base to release `rpi-armbian-edge-7.1.8`.
 - Full image build validated from GitHub Actions run `31589525721`.
 - Release artifact: `vyos-pi5-fresh.img.xz`.
-- Release includes `SHA256SUMS`, `BUILD-INFO.txt` and `pi5-base-manifest.txt`.
+- Release assets: `vyos-pi5-fresh.img.xz` and `SHA256SUMS`.

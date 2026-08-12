@@ -4,7 +4,7 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/frogro/vyos-build-pi5?style=for-the-badge)](https://github.com/frogro/vyos-build-pi5/releases)
 [![GitHub Downloads](https://img.shields.io/github/downloads/frogro/vyos-build-pi5/total?style=for-the-badge)](https://github.com/frogro/vyos-build-pi5/releases)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/frogro/vyos-build-pi5/build-vyos-pi5-rootfs.yml?branch=rolling&style=for-the-badge)](https://github.com/frogro/vyos-build-pi5/actions/workflows/build-vyos-pi5-rootfs.yml)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/frogro/vyos-build-pi5/build-vyos-pi5.yml?branch=rolling&style=for-the-badge)](https://github.com/frogro/vyos-build-pi5/actions/workflows/build-vyos-pi5.yml)
 [![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/FGrootens)
 
 ## Table of Contents
@@ -214,9 +214,7 @@ Modem support depends on the modem, transport, drivers, firmware, carrier, and A
 
 #### Known working hardware
 
-- Raspberry Pi 5 onboard Broadcom BCM43455 / `brcmfmac`: driver loading, firmware loading, `wlan0`, PHY discovery, and AP configuration path verified
-
-Full WPA2 client association on the Raspberry Pi 5 onboard adapter remains release-specific and is documented in the corresponding release notes.
+- Raspberry Pi 5 onboard Broadcom BCM43455 / `brcmfmac`: verified as a 2.4 GHz / 802.11n and 5 GHz / 802.11ac / 80 MHz WPA2 access point, including DHCP, NAT, and client Internet access
 
 #### Expected to work
 
@@ -243,7 +241,7 @@ dmesg
 
 #### Tested and confirmed working
 
-- Fibocom FM350-GL USB/RNDIS detection on Raspberry Pi 5, with the modem data interface enumerating as `eth1` through `rndis_host` while onboard Ethernet remains `eth0`
+- Fibocom FM350-GL USB/RNDIS on Raspberry Pi 5: `eth1` data interface, AT-port detection, FCC unlock, cellular data path, Ethernet-to-WWAN failover, and WWAN-to-Ethernet failback verified
 
 #### Expected to work with compatible drivers and firmware
 
@@ -251,7 +249,7 @@ dmesg
 - Intel XMM7560-based modems
 - Other QMI- or MBIM-capable modems supported by ModemManager
 
-The integrated FM350 path also includes automatic FCC unlock over the AT port, routing, health monitoring, recovery, and Ethernet/WWAN failover logic. Full cellular connectivity and failover behavior on Raspberry Pi 4 / Raspberry Pi 5 is documented per release after hardware validation.
+The integrated FM350 path also includes routing, health monitoring, and recovery logic.
 
 Actual connectivity also depends on the SIM carrier, APN, regional firmware, supported bands, modem transport, kernel drivers, and firmware.
 
@@ -264,22 +262,20 @@ Actual connectivity also depends on the SIM carrier, APN, regional firmware, sup
 The repository includes:
 
 ```text
-.github/workflows/build-vyos-pi5-rootfs.yml
+.github/workflows/build-vyos-pi5.yml
 ```
 
-The current workflow builds a fresh VyOS Rolling ARM64 root filesystem used by the Raspberry Pi image build.
-
-No local ARM64 VyOS build environment is required when using the GitHub Actions workflow.
+No local ARM64 build environment is required when using the GitHub Actions workflow.
 
 From the GitHub website:
 
 1. Fork or clone this repository.
 2. Open **Actions**.
-3. Select **Build VyOS Pi5 RootFS (Rolling ARM64)**.
+3. Select **Build VyOS Raspberry Pi Image (Rolling + Armbian)**.
 4. Click **Run workflow**.
 5. Select the `rolling` branch.
 6. Wait for the workflow to finish.
-7. Download the `vyos-pi5-rootfs-fresh` artifact.
+7. Download the `vyos-pi5-image` artifact.
 
 ### Build with GitHub CLI
 
@@ -287,9 +283,9 @@ Authenticate and start the workflow:
 
 ```bash
 gh auth login
-gh workflow run build-vyos-pi5-rootfs.yml --repo OWNER/vyos-build-pi5 --ref rolling
+gh workflow run build-vyos-pi5.yml --repo OWNER/vyos-build-pi5 --ref rolling
 sleep 5
-gh run list --repo OWNER/vyos-build-pi5 --workflow=build-vyos-pi5-rootfs.yml --limit 1
+gh run list --repo OWNER/vyos-build-pi5 --workflow=build-vyos-pi5.yml --limit 1
 ```
 
 Watch the run:
@@ -305,10 +301,10 @@ mkdir -p ~/Downloads/vyos-pi5-RUN_ID
 gh run download RUN_ID --repo OWNER/vyos-build-pi5 --dir ~/Downloads/vyos-pi5-RUN_ID
 ```
 
-The fresh VyOS ARM64 root filesystem is normally located at:
+The compressed image is normally located at:
 
 ```text
-~/Downloads/vyos-pi5-RUN_ID/vyos-pi5-rootfs-fresh/vyos-rootfs-fresh.tar.gz
+~/Downloads/vyos-pi5-RUN_ID/vyos-pi5-image/vyos-pi5-fresh.img.xz
 ```
 
 Replace `OWNER` with your GitHub username and `RUN_ID` with the workflow run ID.
