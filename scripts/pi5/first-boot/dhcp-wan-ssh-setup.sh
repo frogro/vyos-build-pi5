@@ -18,6 +18,21 @@ fail() {
     builtin exit 1
 }
 
+# VyOS configuration scripts must run with the vyattacfg primary group.
+# Re-exec before argument parsing so all CLI arguments are preserved.
+if [ "$(id -g -n)" != "vyattacfg" ] && [ "${PI5_VYATTACFG_REEXEC:-0}" != "1" ]; then
+    command -v sg >/dev/null 2>&1 || fail "sg command is missing"
+    SCRIPT_PATH="$(readlink -f "$0")"
+    printf -v SCRIPT_Q '%q' "$SCRIPT_PATH"
+    ARGS_Q=""
+    for ARG in "$@"; do
+        printf -v ARG_Q '%q' "$ARG"
+        ARGS_Q+=" $ARG_Q"
+    done
+    export PI5_VYATTACFG_REEXEC=1
+    exec sg vyattacfg -c "/bin/vbash $SCRIPT_Q$ARGS_Q"
+fi
+
 for ARG in "$@"; do
     case "$ARG" in
         --auto) ;;
@@ -74,7 +89,6 @@ sudo /sbin/ip link set "$WIRED_IF" up 2>/dev/null || true
 source /opt/vyatta/etc/functions/script-template
 configure
 
-set interfaces ethernet "$WIRED_IF" hw-id "$MAC"
 set interfaces ethernet "$WIRED_IF" description 'WAN-LAN-DHCP'
 set interfaces ethernet "$WIRED_IF" address 'dhcp'
 set interfaces ethernet "$WIRED_IF" dhcp-options default-route-distance "$ROUTE_DISTANCE"

@@ -28,9 +28,10 @@ FIRSTBOOT_DIR="${SCRIPT_DIR}/first-boot"
 BASE_ENV="${PI5_BASE_ENV:-${REPO_ROOT}/config/pi5-armbian-base.env}"
 NETWORK_FW_SCRIPT="${SCRIPT_DIR}/install-network-firmware.sh"
 INJECT_SCRIPT="${SCRIPT_DIR}/inject-defaults.sh"
+BRCM_FW_CHECK="${SCRIPT_DIR}/validate-brcm43455-firmware.py"
 
 for cmd in xz losetup lsblk blkid mount umount mountpoint tar rsync sha256sum \
-           grep awk find install readlink git; do
+           grep awk find install readlink git python3; do
     command -v "$cmd" >/dev/null 2>&1 || {
         echo "ERROR: required command is missing: $cmd" >&2
         exit 1
@@ -55,6 +56,10 @@ done
 }
 [[ -x "$INJECT_SCRIPT" ]] || {
     echo "ERROR: defaults injector is missing/not executable: $INJECT_SCRIPT" >&2
+    exit 1
+}
+[[ -x "$BRCM_FW_CHECK" ]] || {
+    echo "ERROR: BCM43455 firmware validator is missing/not executable: $BRCM_FW_CHECK" >&2
     exit 1
 }
 [[ -d "$FIRSTBOOT_DIR" ]] || {
@@ -243,6 +248,9 @@ rsync -aHAX "$BASE_ROOT/usr/lib/firmware/" "$VYOS_ROOT/usr/lib/firmware/"
 echo "==> Adding pinned missing-only network firmware"
 "$NETWORK_FW_SCRIPT" "$VYOS_ROOT"
 
+echo "==> Repairing/validating Raspberry Pi BCM43455 firmware links"
+python3 "$BRCM_FW_CHECK" "$VYOS_ROOT" --repair
+
 echo "==> Preserving Armbian /boot tree"
 rm -rf "$VYOS_ROOT/boot"
 mkdir -p "$VYOS_ROOT/boot"
@@ -269,6 +277,9 @@ echo "==> Injecting Raspberry Pi 5 defaults and first-boot services"
     || fail "Pi 5 first-boot timer is not enabled"
 grep -Eq '[[:space:]]/boot/firmware[[:space:]]+vfat[[:space:]]' "$VYOS_ROOT/etc/fstab" \
     || fail "final fstab lost the Raspberry Pi firmware mount"
+
+echo "==> Final BCM43455 firmware validation"
+python3 "$BRCM_FW_CHECK" "$VYOS_ROOT" --check-only
 
 mkdir -p "$OUTDIR"
 OUT_TAR="${OUTDIR}/vyos-rootfs-pi5-merged.tar.gz"

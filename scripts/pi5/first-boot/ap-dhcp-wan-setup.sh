@@ -1,7 +1,7 @@
 #!/bin/vbash
 # VyOS wireless AP, DHCP, and optional Ethernet WAN setup for Raspberry Pi 5 - Version 8.3-pi5 - dynamic PHY binding and WAN detection
 # Erkennt alle WLAN-devicee, laesst einen AP-faehigen Adapter auswaehlen,
-# persistently binds the VyOS configuration to the selected MAC address,
+# uses the selected MAC only for detection/cache and does not bind VyOS to it,
 # configures the local DHCP server, and optionally enables Ethernet WAN with NAT,
 # but only when an Ethernet interface with carrier is detected while the script runs.
 # Prueft/activeiert ausserdem SSH robust through TCP-Port 22/sshd und fragt interactive nach SSID, Passwort und Wireless country code.
@@ -23,7 +23,7 @@ DNS_FORWARD_1="${DNS_FORWARD_1:-1.1.1.1}"
 DNS_FORWARD_2="${DNS_FORWARD_2:-8.8.8.8}"
 WAN_ROUTE_DISTANCE="${WAN_ROUTE_DISTANCE:-1}"
 FORCED_IF="${VYOS_IF:-}"
-AP_IF_CACHE="${AP_IF_CACHE:-/etc/photobooth-ap-interface.conf}"
+AP_IF_CACHE="${AP_IF_CACHE:-/config/photobooth-ap-interface.conf}"
 OLD_UDEV_RULE="${OLD_UDEV_RULE:-/etc/udev/rules.d/70-vyos-ap-phy.rules}"
 WAN_MODE="${WAN_MODE:-auto}"
 FORCED_WAN_IF="${WAN_IF:-}"
@@ -31,7 +31,7 @@ NAT_RULE="${NAT_RULE:-150}"
 
 usage() {
   cat <<USAGE
-Usage: sudo $0 [OPTIONS]
+Usage: $0 [OPTIONS]
 
 Options:
   --ssid NAME             SSID; unterdrueckt die Rueckfrage
@@ -66,6 +66,21 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required command is missing: $1"
 }
 
+# VyOS configuration scripts must run with the vyattacfg primary group.
+# Re-exec before argument parsing so all CLI arguments are preserved.
+if [ "$(id -g -n)" != "vyattacfg" ] && [ "${PI5_VYATTACFG_REEXEC:-0}" != "1" ]; then
+  command -v sg >/dev/null 2>&1 || die "sg command is missing"
+  SCRIPT_PATH="$(readlink -f "$0")"
+  printf -v SCRIPT_Q '%q' "$SCRIPT_PATH"
+  ARGS_Q=""
+  for ARG in "$@"; do
+    printf -v ARG_Q '%q' "$ARG"
+    ARGS_Q+=" $ARG_Q"
+  done
+  export PI5_VYATTACFG_REEXEC=1
+  exec sg vyattacfg -c "/bin/vbash $SCRIPT_Q$ARGS_Q"
+fi
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --ssid) [ "$#" -ge 2 ] || die "Missing value for --ssid is missing"; SSID="$2"; SSID_FROM_CLI=1; shift 2 ;;
@@ -84,7 +99,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ "$EUID" -eq 0 ] || die "Please run with sudo"
 [ -r /opt/vyatta/etc/functions/script-template ] || die "VyOS script-template not found"
 
 need_cmd iw
@@ -97,6 +111,9 @@ need_cmd paste
 need_cmd readlink
 need_cmd python3
 need_cmd find
+need_cmd install
+need_cmd mktemp
+need_cmd sudo
 
 if [ "$SSID_FROM_CLI" -eq 0 ]; then
   read -rp "Wireless SSID [$SSID]: " SSID_INPUT
@@ -152,7 +169,7 @@ if start == gw or stop == gw or int(start) <= int(gw) <= int(stop):
     raise SystemExit("ERROR: AP gateway must not be inside the DHCP range")
 PY
 
-iw reg set "$REG_COUNTRY" 2>/dev/null || true
+sudo iw reg set "$REG_COUNTRY" 2>/dev/null || true
 sleep 1
 
 ssh_is_running() {
@@ -492,8 +509,8 @@ if [ -r "$AP_IF_CACHE" ]; then
   OLD_AP_MAC="$(sed -n "s/^AP_MAC=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}$/\1/p" "$AP_IF_CACHE" | head -1)"
 fi
 
-rm -f "$OLD_UDEV_RULE"
-command -v udevadm >/dev/null 2>&1 && udevadm control --reload-rules 2>/dev/null || true
+sudo rm -f "$OLD_UDEV_RULE"
+command -v udevadm >/dev/null 2>&1 && sudo udevadm control --reload-rules 2>/dev/null || true
 
 echo ""
 echo "Selected: $PHY / $DRIVER / $BUS / MAC $MAC"
@@ -530,7 +547,6 @@ done
 
 set system wireless country-code "$COUNTRY_CODE"
 set service ssh
-set interfaces wireless "$VYOS_IF" hw-id "$MAC"
 set interfaces wireless "$VYOS_IF" physical-device "$PHY"
 set interfaces wireless "$VYOS_IF" address "$AP_ADDRESS"
 set interfaces wireless "$VYOS_IF" type 'access-point'
@@ -654,7 +670,8 @@ else
   echo "[3/3] No verbundenes Ethernet WAN: Schritt throughsprungen."
 fi
 
-cat > "$AP_IF_CACHE" <<CACHE
+CACHE_TMP="$(mktemp)"
+cat > "$CACHE_TMP" <<CACHE
 AP_IF='$VYOS_IF'
 AP_MAC='$MAC'
 AP_SSID='$SSID'
@@ -669,7 +686,8 @@ WAN_ROUTE_DISTANCE='$WAN_ROUTE_DISTANCE'
 DNS_FORWARD_1='$DNS_FORWARD_1'
 DNS_FORWARD_2='$DNS_FORWARD_2'
 CACHE
-chmod 600 "$AP_IF_CACHE"
+install -m 0600 "$CACHE_TMP" "$AP_IF_CACHE"
+rm -f "$CACHE_TMP"
 
 READY_AP=0
 READY_DHCP=0
@@ -727,6 +745,6 @@ else
 fi
 
 echo "Wireless country code: $REG_COUNTRY"
-echo "Persistent adapter binding: $VYOS_IF -> $MAC"
+echo "Detected AP adapter: $VYOS_IF -> $MAC (MAC is not stored as VyOS hw-id)"
 echo "Cache: $AP_IF_CACHE"
 builtin exit 0

@@ -5,8 +5,9 @@ set -euo pipefail
 #   1) the pinned Armbian Pi hardware-base image
 #   2) a merged VyOS rootfs produced by merge-vyos-pi5.sh
 #
-# The original MBR and p1 Raspberry Pi firmware partition are preserved
-# byte-for-byte. Only p2 is extended and its filesystem contents are replaced.
+# The original MBR/partition layout is preserved. p2 is extended and replaced
+# with the merged VyOS rootfs. p1 (RPICFG) is intentionally patched with the
+# validated Pi 5 cmdline/config.txt settings required by this build.
 #
 # Usage:
 #   sudo ./scripts/pi5/build-vyos-pi5-image.sh \
@@ -30,9 +31,10 @@ IMAGE_SIZE_GIB="${IMAGE_SIZE_GIB:-6}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BASE_ENV="${PI5_BASE_ENV:-${REPO_ROOT}/config/pi5-armbian-base.env}"
+BRCM_FW_CHECK="${SCRIPT_DIR}/validate-brcm43455-firmware.py"
 
 for cmd in xz truncate stat losetup lsblk blkid parted e2fsck resize2fs \
-           mount umount mountpoint tar sha256sum grep awk readlink sync; do
+           mount umount mountpoint tar sha256sum grep awk readlink sync python3 tr; do
     command -v "$cmd" >/dev/null 2>&1 || {
         echo "ERROR: required command is missing: $cmd" >&2
         exit 1
@@ -49,6 +51,10 @@ done
 }
 [[ -f "$BASE_ENV" ]] || {
     echo "ERROR: Pi 5 base config not found: $BASE_ENV" >&2
+    exit 1
+}
+[[ -x "$BRCM_FW_CHECK" ]] || {
+    echo "ERROR: BCM43455 firmware validator is missing/not executable: $BRCM_FW_CHECK" >&2
     exit 1
 }
 [[ "$IMAGE_SIZE_GIB" =~ ^[0-9]+$ ]] || {
@@ -183,6 +189,46 @@ run_e2fsck() {
     esac
 }
 
+patch_rpicfg() {
+    local cmdline token
+
+    mkdir -p "$BOOT_MNT"
+    mount "${LOOPDEV}p1" "$BOOT_MNT"
+
+    [[ -f "$BOOT_MNT/cmdline.txt" ]] || fail "RPICFG cmdline.txt is missing"
+    [[ -f "$BOOT_MNT/config.txt" ]] || fail "RPICFG config.txt is missing"
+    [[ -f "$BOOT_MNT/overlays/pcie-32bit-dma-pi5.dtbo" ]] \
+        || fail "required overlay pcie-32bit-dma-pi5.dtbo is missing from RPICFG"
+
+    cmdline="$(tr -d '\r\n' < "$BOOT_MNT/cmdline.txt")"
+    for token in 'net.ifnames=0' 'modprobe.blacklist=btusb,btmtk'; do
+        case " $cmdline " in
+            *" $token "*) ;;
+            *) cmdline="$cmdline $token" ;;
+        esac
+    done
+    printf '%s\n' "$cmdline" > "$BOOT_MNT/cmdline.txt"
+
+    if ! grep -Eq '^[[:space:]]*dtparam=pciex1[[:space:]]*$' "$BOOT_MNT/config.txt" ||
+       ! grep -Eq '^[[:space:]]*dtoverlay=pcie-32bit-dma-pi5[[:space:]]*$' "$BOOT_MNT/config.txt"; then
+        printf '\n[all]\n# Enable Raspberry Pi 5 external PCIe x1\n' >> "$BOOT_MNT/config.txt"
+        if ! grep -Eq '^[[:space:]]*dtparam=pciex1[[:space:]]*$' "$BOOT_MNT/config.txt"; then
+            printf 'dtparam=pciex1\n' >> "$BOOT_MNT/config.txt"
+        fi
+        if ! grep -Eq '^[[:space:]]*dtoverlay=pcie-32bit-dma-pi5[[:space:]]*$' "$BOOT_MNT/config.txt"; then
+            printf 'dtoverlay=pcie-32bit-dma-pi5\n' >> "$BOOT_MNT/config.txt"
+        fi
+    fi
+
+    # This HAT is intentionally kept at the stable/default PCIe generation.
+    if grep -Eq '^[[:space:]]*dtparam=pciex1_gen=3([[:space:]]|$)' "$BOOT_MNT/config.txt"; then
+        fail "config.txt unexpectedly enables pciex1_gen=3"
+    fi
+
+    sync
+    umount "$BOOT_MNT"
+}
+
 verify_final_image() {
     local image_target kver dtb_target
     local boot_kernel root_kernel boot_initrd root_initrd boot_dtb root_dtb
@@ -200,6 +246,16 @@ verify_final_image() {
         || fail "final config.txt does not select initrd.img"
     grep -Eq '(^|[[:space:]])root=LABEL=armbi_root([[:space:]]|$)' "$BOOT_MNT/cmdline.txt" \
         || fail "final cmdline.txt lost root=LABEL=armbi_root"
+    grep -Eq '(^|[[:space:]])net\.ifnames=0([[:space:]]|$)' "$BOOT_MNT/cmdline.txt" \
+        || fail "final cmdline.txt lost net.ifnames=0"
+    grep -Eq '(^|[[:space:]])modprobe\.blacklist=btusb,btmtk([[:space:]]|$)' "$BOOT_MNT/cmdline.txt" \
+        || fail "final cmdline.txt lost Bluetooth module blacklist"
+    grep -Eq '^[[:space:]]*dtparam=pciex1[[:space:]]*$' "$BOOT_MNT/config.txt" \
+        || fail "final config.txt lost dtparam=pciex1"
+    grep -Eq '^[[:space:]]*dtoverlay=pcie-32bit-dma-pi5[[:space:]]*$' "$BOOT_MNT/config.txt" \
+        || fail "final config.txt lost pcie-32bit-dma-pi5 overlay"
+    [[ -f "$BOOT_MNT/overlays/pcie-32bit-dma-pi5.dtbo" ]] \
+        || fail "final RPICFG is missing pcie-32bit-dma-pi5.dtbo"
 
     grep -Eq '[[:space:]]/boot/firmware[[:space:]]+vfat[[:space:]]' "$ROOT_MNT/etc/fstab" \
         || fail "final fstab does not mount RPICFG on /boot/firmware"
@@ -236,6 +292,19 @@ verify_final_image() {
         || fail "final Pi 5 first-boot timer is not enabled"
     [[ -x "$ROOT_MNT/home/vyos/ap-dhcp-wan-setup.sh" ]] \
         || fail "final AP setup helper missing"
+    [[ -f "$ROOT_MNT/home/vyos/.bashrc" ]] || fail "final VyOS .bashrc missing"
+    [[ -f "$ROOT_MNT/home/vyos/.profile" ]] || fail "final VyOS .profile missing"
+    grep -Fq '/usr/share/bash-completion/bash_completion' "$ROOT_MNT/home/vyos/.bashrc" \
+        || fail "final VyOS .bashrc does not initialize bash-completion"
+
+    if grep -Eq 'set interfaces (ethernet|wireless).*hw-id' \
+        "$ROOT_MNT/home/vyos/dhcp-wan-ssh-setup.sh" \
+        "$ROOT_MNT/home/vyos/ap-dhcp-wan-setup.sh"; then
+        fail "final Pi helper scripts still create MAC-based VyOS hw-id bindings"
+    fi
+
+    python3 "$BRCM_FW_CHECK" "$ROOT_MNT" --check-only \
+        || fail "final BCM43455 firmware validation failed"
 
     # Verify critical supplemental firmware that the merge step is expected to add.
     for rel in \
@@ -248,15 +317,12 @@ verify_final_image() {
     done
 
     p1_sha_after="$(sha256_blockdev "${LOOPDEV}p1")"
-    [[ "$p1_sha_after" == "$P1_SHA_BEFORE" ]] || {
-        echo "Before: $P1_SHA_BEFORE" >&2
-        echo "After:  $p1_sha_after" >&2
-        fail "RPICFG partition changed during image build"
-    }
 
     echo "==> Final image validation OK"
     echo "    Kernel: $kver"
-    echo "    RPICFG SHA-256 unchanged: $p1_sha_after"
+    echo "    RPICFG base SHA-256:  $P1_SHA_BEFORE"
+    echo "    RPICFG final SHA-256: $p1_sha_after"
+    echo "    RPICFG changes are intentional and token-validated"
 
     sync
     umount "$BOOT_MNT"
@@ -310,6 +376,9 @@ tar \
 
 sync
 umount "$ROOT_MNT"
+
+echo "==> Applying validated Pi 5 RPICFG settings"
+patch_rpicfg
 
 echo "==> Running final Pi 5 image validation"
 verify_final_image

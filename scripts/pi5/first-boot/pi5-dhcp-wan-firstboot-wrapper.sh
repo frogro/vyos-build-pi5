@@ -46,6 +46,16 @@ done
 [ -n "$IPV4" ] || fail "$IFACE erhielt nach dem dhclient-Neustart keine IPv4-Adresse"
 log "$IFACE behaelt IPv4 $IPV4"
 
+DEFAULT_ROUTE=""
+for _ in $(seq 1 30); do
+    DEFAULT_ROUTE="$(ip -4 route show default dev "$IFACE" 2>/dev/null | head -1)"
+    [ -n "$DEFAULT_ROUTE" ] && break
+    sleep 2
+done
+
+[ -n "$DEFAULT_ROUTE" ] || fail "$IFACE erhielt per DHCP keine IPv4-Default-Route"
+log "Default-Route aktiv: $DEFAULT_ROUTE"
+
 if ! ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:|\])22$'; then
     for SSH_UNIT in ssh@default.service ssh.service sshd.service; do
         if /bin/systemctl cat "$SSH_UNIT" >/dev/null 2>&1; then

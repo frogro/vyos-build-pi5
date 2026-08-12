@@ -27,6 +27,15 @@ for REQUIRED in \
     }
 done
 
+# The VyOS login shell requires these files so bash-completion initializes
+# the interactive operational CLI (show, renew, monitor, ...).
+for REQUIRED in .bashrc .profile .bash_logout; do
+    [[ -f "$SCRIPT_DIR/home-dotfiles/$REQUIRED" ]] || {
+        echo "Required home dotfile is missing: $SCRIPT_DIR/home-dotfiles/$REQUIRED" >&2
+        exit 1
+    }
+done
+
 # Use a UTF-8 locale that is present in the minimal VyOS root filesystem.
 # Setting this during image creation prevents Perl locale warnings during the
 # very first vyos-router boot, before set-locales.sh can be run interactively.
@@ -84,17 +93,15 @@ for F in \
     install -m 0755 "$SCRIPT_DIR/$F" "$MERGED_ROOT/home/vyos/$F"
 done
 
-if [[ -d "$SCRIPT_DIR/home-dotfiles" ]]; then
-    for F in .bashrc .profile .bash_logout; do
-        [[ -f "$SCRIPT_DIR/home-dotfiles/$F" ]] || continue
-        install -m 0644 \
-            "$SCRIPT_DIR/home-dotfiles/$F" \
-            "$MERGED_ROOT/home/vyos/$F"
-    done
-    rm -f \
-        "$MERGED_ROOT/home/vyos/.bash_profile" \
-        "$MERGED_ROOT/home/vyos/.bash_login"
-fi
+for F in .bashrc .profile .bash_logout; do
+    install -m 0644 \
+        "$SCRIPT_DIR/home-dotfiles/$F" \
+        "$MERGED_ROOT/home/vyos/$F"
+done
+
+rm -f \
+    "$MERGED_ROOT/home/vyos/.bash_profile" \
+    "$MERGED_ROOT/home/vyos/.bash_login"
 
 for F in \
     ap-dhcp-wan-setup.sh \
@@ -165,6 +172,21 @@ grep -qx \
 grep -qx \
     'LC_ALL=C.UTF-8' \
     "$MERGED_ROOT/etc/default/locale"
+
+# Verify the VyOS interactive login environment.
+for F in .bashrc .profile .bash_logout; do
+    test -f "$MERGED_ROOT/home/vyos/$F"
+done
+
+test ! -e "$MERGED_ROOT/home/vyos/.bash_profile"
+test ! -e "$MERGED_ROOT/home/vyos/.bash_login"
+
+# .profile must load .bashrc and .bashrc must load bash-completion.
+grep -Fq '. "$HOME/.bashrc"' \
+    "$MERGED_ROOT/home/vyos/.profile"
+
+grep -Fq '/usr/share/bash-completion/bash_completion' \
+    "$MERGED_ROOT/home/vyos/.bashrc"
 
 rm -f "$MERGED_ROOT/persistence.conf" 2>/dev/null || true
 
