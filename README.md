@@ -47,7 +47,6 @@ This repository provides an unofficial VyOS image for Raspberry Pi 4 and Raspber
   - verification that the DHCP address and default route remain active
 - Optional wireless access point, DHCP server, DNS forwarding, and NAT
 - Optional LTE/5G modem support
-- GitHub Actions workflow for reproducible VyOS Rolling ARM64 root filesystem builds
 - Ready-to-flash compressed images published through GitHub Releases
 
 The first-boot Ethernet setup starts after VyOS has completed its normal boot configuration. It saves Ethernet and SSH settings to `/config/config.boot`, starts the persistent VyOS DHCP client, verifies IPv4 connectivity and the default route, verifies that SSH is listening, and disables its own first-boot timer after success.
