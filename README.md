@@ -4,6 +4,7 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/frogro/vyos-build-pi5?style=for-the-badge)](https://github.com/frogro/vyos-build-pi5/releases)
 [![GitHub Downloads](https://img.shields.io/github/downloads/frogro/vyos-build-pi5/total?style=for-the-badge)](https://github.com/frogro/vyos-build-pi5/releases)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/frogro/vyos-build-pi5/build-vyos-pi5-rootfs.yml?branch=rolling&style=for-the-badge)](https://github.com/frogro/vyos-build-pi5/actions/workflows/build-vyos-pi5-rootfs.yml)
 [![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/FGrootens)
 
 ## Table of Contents
@@ -20,56 +21,36 @@
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
 - [License and Trademarks](#license-and-trademarks)
-- [Support the Project](#support-the-project)
+- [Support the Project](#️-support-the-project)
 
-This repository provides a build system for creating bootable **VyOS Rolling ARM64 images for Raspberry Pi 4 and Raspberry Pi 5**.
+This repository provides an unofficial VyOS image for Raspberry Pi 4 and Raspberry Pi 5 by combining:
 
-The image combines:
+- the VyOS Rolling ARM64 userspace and configuration system;
+- an Armbian Raspberry Pi kernel, firmware, modules, Device Trees, overlays, and boot environment;
+- Raspberry Pi-specific first-boot networking helpers.
 
-- the current VyOS Rolling ARM64 userspace and configuration system;
-- a pinned and checksummed Armbian Raspberry Pi hardware base;
-- Raspberry Pi Linux kernel, Device Trees, overlays, modules and firmware;
-- Raspberry Pi-specific image integration;
-- automatic first-boot Ethernet/DHCP configuration;
-- SSH configuration;
-- wireless access-point tools;
-- cellular / WWAN integration and failover tools.
-
-The result is a reproducible, ready-to-flash VyOS image without requiring users to manually assemble the Raspberry Pi boot environment and VyOS root filesystem.
-
-**Upstream attribution:** VyOS provides the routing userspace and configuration framework. Armbian provides the Raspberry Pi-compatible Linux kernel, modules, firmware, Device Trees and boot integration used as the hardware base.
+**Upstream attribution:** VyOS provides the routing userspace and configuration framework; Armbian provides the Raspberry Pi-compatible Linux kernel, modules, firmware, Device Trees, overlays, and boot integration; Raspberry Pi Ltd. designs and documents the Raspberry Pi hardware.
 
 > [!WARNING]
-> This is an independent community project. It is not produced, supported, sponsored, certified, or endorsed by VyOS, Sentrium S.L., Armbian, or Raspberry Pi.
->
-> VyOS Rolling changes continuously and may contain regressions. Check the release notes and verify checksums before production use.
+> This is an independent community project built from components provided by the **VyOS**, **Armbian**, and **Raspberry Pi** ecosystems. It is not produced, supported, sponsored, certified, or endorsed by the VyOS project, Sentrium S.L., Armbian, Armbian d.o.o., Raspberry Pi Ltd., or the Raspberry Pi Foundation. Rolling releases may contain regressions and should be tested before production use.
 
 ## Features
 
-- Raspberry Pi 4 and Raspberry Pi 5 support
-- Current VyOS Rolling ARM64 userspace and configuration system
-- Pinned and checksummed Armbian Raspberry Pi hardware base
-- Raspberry Pi Linux kernel, Device Trees, overlays, modules and firmware
-- Automated GitHub Actions builds
-- Ready-to-flash compressed images
-- SHA-256 verification
-- Automatic wired WAN configuration on first boot
-- Automatic Ethernet interface detection
-- DHCP WAN configuration
-- Default-route verification
-- SSH enabled during initial configuration
-- Persistent VyOS configuration
-- Optional wireless access point
-- Optional DHCP server, DNS forwarding and NAT for wireless clients
-- Cellular / WWAN modem setup
-- Ethernet / WWAN failover
-- WWAN health monitoring and recovery
-- Missing-only network firmware supplementation
-- Complete build and integration sources available on GitHub
+- Raspberry Pi 4 and Raspberry Pi 5 ARM64 image target
+- Raspberry Pi boot through the pinned Armbian hardware base
+- Raspberry Pi Linux kernel, Device Trees, overlays, modules, and firmware
+- Automatic wired WAN setup on first boot:
+  - automatic physical Ethernet interface detection
+  - DHCP on the detected Ethernet interface
+  - preferred wired default route
+  - SSH enabled
+  - verification that the DHCP address and default route remain active
+- Optional wireless access point, DHCP server, DNS forwarding, and NAT
+- Optional LTE/5G modem support
+- GitHub Actions workflow for reproducible VyOS Rolling ARM64 root filesystem builds
+- Ready-to-flash compressed images published through GitHub Releases
 
-The build system is designed so that the same VyOS image can be used on both **Raspberry Pi 4 and Raspberry Pi 5**.
-
-Board-specific hardware behavior can differ between the two platforms. Hardware-specific validation is documented in the corresponding release notes where relevant.
+The first-boot Ethernet setup starts after VyOS has completed its normal boot configuration. It saves Ethernet and SSH settings to `/config/config.boot`, starts the persistent VyOS DHCP client, verifies IPv4 connectivity and the default route, verifies that SSH is listening, and disables its own first-boot timer after success.
 
 ---
 
@@ -77,19 +58,14 @@ Board-specific hardware behavior can differ between the two platforms. Hardware-
 
 ### 1. Download the ready-to-use image
 
-Open the [GitHub Releases page](https://github.com/frogro/vyos-build-pi5/releases) and download:
+Open the [Releases page](https://github.com/frogro/vyos-build-pi5/releases) and download:
 
 ```text
 vyos-pi5-fresh.img.xz
 SHA256SUMS
 ```
 
-The same image is intended for both:
-
-```text
-Raspberry Pi 4
-Raspberry Pi 5
-```
+The current filename retains the historical `pi5` project name. The image is intended for the Raspberry Pi 4 / Raspberry Pi 5 build target.
 
 Verify the download on Linux:
 
@@ -97,29 +73,17 @@ Verify the download on Linux:
 sha256sum -c SHA256SUMS
 ```
 
-Expected result:
-
-```text
-vyos-pi5-fresh.img.xz: OK
-```
-
-You can also verify the XZ archive itself:
-
-```bash
-xz -t vyos-pi5-fresh.img.xz
-```
-
-Use a target drive that is larger than the uncompressed image.
+Use a target drive larger than the uncompressed image. An 8 GB or larger SD card, USB drive, or supported SSD is recommended.
 
 ### 2. Flash with balenaEtcher
 
-[balenaEtcher](https://etcher.balena.io/) is available for Linux, Windows and macOS.
+[balenaEtcher](https://etcher.balena.io/) is available for Linux, Windows, and macOS.
 
 1. Start balenaEtcher.
 2. Select `vyos-pi5-fresh.img.xz` directly.
-3. Select the SD card, USB drive, SSD or other supported Raspberry Pi boot device.
+3. Select the SD card, SSD, or USB drive.
 4. Click **Flash**.
-5. Wait for flashing and verification to complete.
+5. Wait for flashing and verification to finish.
 
 > [!CAUTION]
 > Flashing destroys all data on the selected target drive. Verify the destination carefully.
@@ -132,24 +96,19 @@ Replace `/dev/sdX` with the complete target device, not a partition such as `/de
 
 ```bash
 sudo umount /dev/sdX?* 2>/dev/null || true
-xz -dc vyos-pi5-fresh.img.xz | \
-  sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+xz -dc vyos-pi5-fresh.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 sync
 sudo eject /dev/sdX
 ```
 
 #### Option B: extract first, then write
 
+This may be faster on slower systems because decompression and writing do not occur simultaneously.
+
 ```bash
 xz -dk vyos-pi5-fresh.img.xz
-
 sudo umount /dev/sdX?* 2>/dev/null || true
-sudo dd if=vyos-pi5-fresh.img \
-  of=/dev/sdX \
-  bs=4M \
-  status=progress \
-  conv=fsync
-
+sudo dd if=vyos-pi5-fresh.img of=/dev/sdX bs=4M status=progress conv=fsync
 sync
 sudo eject /dev/sdX
 ```
@@ -159,35 +118,13 @@ sudo eject /dev/sdX
 ## First Boot and Login
 
 1. Connect the Raspberry Pi Ethernet port to a network that provides DHCP.
-2. Insert or attach the flashed boot device.
+2. Insert or attach the flashed boot drive.
 3. Power on the Raspberry Pi 4 or Raspberry Pi 5.
-4. Allow the first-boot configuration to complete.
-5. Find the assigned IPv4 address in your router or DHCP server.
+4. Allow approximately 60–90 seconds for first-boot configuration.
+5. Find the assigned address in your router or DHCP server.
 6. Connect over SSH.
 
-During first boot the image automatically performs:
-
-```text
-Raspberry Pi boot
-        ↓
-VyOS Rolling startup
-        ↓
-wired Ethernet detection
-        ↓
-DHCP configuration
-        ↓
-IPv4 address verification
-        ↓
-default-route verification
-        ↓
-SSH configuration
-        ↓
-VyOS configuration commit + save
-        ↓
-first-boot service disables itself
-```
-
-Default credentials:
+Default credentials for this image:
 
 ```text
 Username: vyos
@@ -200,7 +137,7 @@ Example:
 ssh vyos@192.168.1.100
 ```
 
-Replace `192.168.1.100` with the address assigned by your DHCP server.
+Replace the example address with the address assigned to your Raspberry Pi.
 
 > [!IMPORTANT]
 > Change the default password immediately after the first login. For stronger security, configure SSH key authentication and stop using password-based login.
@@ -215,101 +152,50 @@ save
 exit
 ```
 
-The wired interface selected during first boot is recorded in:
-
-```text
-/config/.dhcp-wan-interface
-```
-
-Display it:
+Check which Ethernet interface was selected during first boot:
 
 ```bash
 cat /config/.dhcp-wan-interface
 ```
 
-Check its IPv4 address:
+Check Ethernet locally from the HDMI or serial console:
 
 ```bash
 IFACE="$(cat /config/.dhcp-wan-interface)"
 ip -4 -br addr show "$IFACE"
 ```
 
-Check the default route:
-
-```bash
-ip -4 route show default
-```
-
-### First-boot diagnostics
+<details>
+<summary><strong>First-boot diagnostics</strong></summary>
 
 ```bash
 cat /config/dhcp-wan-firstboot-wrapper.log
 cat /config/dhcp-wan-ssh-setup.log
+IFACE="$(cat /config/.dhcp-wan-interface)"
+systemctl status "dhclient@${IFACE}.service" --no-pager -l
 ```
 
-The successful first-boot marker is:
+The first-boot marker is:
 
 ```text
 /config/.dhcp-wan-ssh-firstboot-done
 ```
 
-Check the DHCP client:
-
-```bash
-IFACE="$(cat /config/.dhcp-wan-interface)"
-systemctl status "dhclient@${IFACE}.service" --no-pager -l
-```
-
-Check SSH:
-
-```bash
-ss -ltn | grep ':22'
-```
+</details>
 
 ---
 
 ## Optional Helper Scripts
 
-The image includes networking helper scripts in:
+The image includes helper scripts in `/home/vyos`.
 
-```text
-/home/vyos
-```
-
-### Wired DHCP and SSH
-
-```bash
-/home/vyos/dhcp-wan-ssh-setup.sh --auto
-```
-
-The helper automatically detects an appropriate wired Ethernet interface and configures:
-
-- DHCP
-- default-route preference
-- SSH
-- persistent VyOS configuration
-
-An interface can also be selected explicitly:
-
-```bash
-/home/vyos/dhcp-wan-ssh-setup.sh --interface=eth0
-```
-
-### Wireless access point
+### Configure a wireless access point
 
 ```bash
 /home/vyos/ap-dhcp-wan-setup.sh
 ```
 
-The AP helper can configure:
-
-- wireless access point
-- DHCP server
-- DNS forwarding
-- NAT
-- optional wired WAN
-
-The helper discovers available Linux wireless PHYs and reads the capabilities reported by the kernel instead of depending only on one fixed adapter name or chipset.
+This is separate from the automatic wired DHCP and SSH setup. Run it only when an access point, DHCP server, DNS forwarding, and NAT are required.
 
 ### Configure a modem
 
@@ -329,13 +215,13 @@ Modem support depends on the modem, transport, drivers, firmware, carrier, and A
 
 #### Known working hardware
 
-- Raspberry Pi 5 onboard Broadcom BCM43455 / `brcmfmac` — kernel driver, firmware loading, `wlan0`, PHY discovery, and AP configuration path have been verified
+- Raspberry Pi 5 onboard Broadcom BCM43455 / `brcmfmac`: driver loading, firmware loading, `wlan0`, PHY discovery, and AP configuration path verified
 
-A complete WPA2 client-connect validation is release-specific and is documented in the corresponding release notes before full AP operation is claimed as verified.
+Full WPA2 client association on the Raspberry Pi 5 onboard adapter remains release-specific and is documented in the corresponding release notes.
 
 #### Expected to work
 
-- Raspberry Pi 4 onboard Broadcom Wi-Fi with compatible Raspberry Pi kernel/firmware support
+- Raspberry Pi 4 onboard Broadcom Wi-Fi with compatible kernel and firmware
 - MediaTek MT7921-class M.2/PCIe Wi-Fi 6 adapters
 - Realtek RTL8852-class M.2/PCIe Wi-Fi 6 adapters
 - MediaTek MT7612U-based USB adapters
@@ -358,7 +244,7 @@ dmesg
 
 #### Tested and confirmed working
 
-- Fibocom FM350-GL USB/RNDIS detection on Raspberry Pi 5, including native `eth1` enumeration through `rndis_host`
+- Fibocom FM350-GL USB/RNDIS detection on Raspberry Pi 5, with the modem data interface enumerating as `eth1` through `rndis_host` while onboard Ethernet remains `eth0`
 
 #### Expected to work with compatible drivers and firmware
 
@@ -366,7 +252,7 @@ dmesg
 - Intel XMM7560-based modems
 - Other QMI- or MBIM-capable modems supported by ModemManager
 
-The integrated modem helper also contains FM350-specific FCC-unlock, routing, health-check, and recovery logic. Full cellular connectivity and failover validation on Raspberry Pi 4 / Raspberry Pi 5 is documented per release.
+The integrated FM350 path also includes automatic FCC unlock over the AT port, routing, health monitoring, recovery, and Ethernet/WWAN failover logic. Full cellular connectivity and failover behavior on Raspberry Pi 4 / Raspberry Pi 5 is documented per release after hardware validation.
 
 Actual connectivity also depends on the SIM carrier, APN, regional firmware, supported bands, modem transport, kernel drivers, and firmware.
 
@@ -382,7 +268,7 @@ The repository includes:
 .github/workflows/build-vyos-pi5-rootfs.yml
 ```
 
-This workflow builds a fresh **VyOS Rolling ARM64 root filesystem** on a native ARM64 GitHub Actions runner.
+The current workflow builds a fresh VyOS Rolling ARM64 root filesystem used by the Raspberry Pi image build.
 
 No local ARM64 VyOS build environment is required when using the GitHub Actions workflow.
 
@@ -395,14 +281,6 @@ From the GitHub website:
 5. Select the `rolling` branch.
 6. Wait for the workflow to finish.
 7. Download the `vyos-pi5-rootfs-fresh` artifact.
-
-The artifact contains:
-
-```text
-vyos-rootfs-fresh.tar.gz
-SHA256SUMS
-VYOS-ROOTFS-BUILD-INFO.txt
-```
 
 ### Build with GitHub CLI
 
@@ -424,145 +302,28 @@ gh run watch RUN_ID --repo OWNER/vyos-build-pi5 --exit-status
 Download the completed artifact:
 
 ```bash
-mkdir -p ~/Downloads/vyos-pi-RUN_ID
-gh run download RUN_ID \
-  --repo OWNER/vyos-build-pi5 \
-  --dir ~/Downloads/vyos-pi-RUN_ID
+mkdir -p ~/Downloads/vyos-pi5-RUN_ID
+gh run download RUN_ID --repo OWNER/vyos-build-pi5 --dir ~/Downloads/vyos-pi5-RUN_ID
 ```
 
 The fresh VyOS ARM64 root filesystem is normally located at:
 
 ```text
-~/Downloads/vyos-pi-RUN_ID/vyos-pi5-rootfs-fresh/vyos-rootfs-fresh.tar.gz
+~/Downloads/vyos-pi5-RUN_ID/vyos-pi5-rootfs-fresh/vyos-rootfs-fresh.tar.gz
 ```
 
 Replace `OWNER` with your GitHub username and `RUN_ID` with the workflow run ID.
-
-### Assemble the Raspberry Pi image
-
-The final Raspberry Pi image is assembled from:
-
-1. the pinned Armbian Raspberry Pi hardware-base image;
-2. the fresh VyOS Rolling ARM64 root filesystem.
-
-The pinned hardware-base metadata is stored in:
-
-```text
-config/pi5-armbian-base.env
-```
-
-First merge the VyOS userspace with the Raspberry Pi kernel, modules, firmware, boot files, default configuration, and helper scripts:
-
-```bash
-sudo ./scripts/pi5/merge-vyos-pi5.sh \
-  /path/to/armbian-rpi.img.xz \
-  /path/to/vyos-rootfs-fresh.tar.gz \
-  ./out-pi
-```
-
-This creates:
-
-```text
-./out-pi/vyos-rootfs-pi5-merged.tar.gz
-./out-pi/pi5-base-manifest.txt
-```
-
-Then build the flashable disk image:
-
-```bash
-sudo ./scripts/pi5/build-vyos-pi5-image.sh \
-  /path/to/armbian-rpi.img.xz \
-  ./out-pi/vyos-rootfs-pi5-merged.tar.gz \
-  ./vyos-pi5-fresh.img
-```
-
-Compress the image and create the checksum file:
-
-```bash
-xz -T0 -9 -k ./vyos-pi5-fresh.img
-sha256sum ./vyos-pi5-fresh.img.xz > SHA256SUMS
-```
-
-The resulting release files are:
-
-```text
-vyos-pi5-fresh.img.xz
-SHA256SUMS
-```
 
 ---
 
 ## Build Design
 
-The image is assembled from two main components.
+The image is assembled from two main components:
 
-### 1. Armbian Raspberry Pi hardware base
+1. **Armbian Raspberry Pi base** — Raspberry Pi boot environment, Device Trees, overlays, Linux kernel, modules, and firmware.
+2. **VyOS Rolling ARM64 root filesystem** — VyOS userspace, configuration system, services, and CLI.
 
-Provides:
-
-- Raspberry Pi boot environment
-- ARM64 Linux kernel
-- Device Trees
-- overlays
-- kernel modules
-- hardware firmware
-
-### 2. VyOS Rolling ARM64 root filesystem
-
-Provides:
-
-- VyOS userspace
-- configuration system
-- CLI
-- routing
-- firewall
-- NAT
-- DHCP
-- SSH
-- networking services
-
-The merge process preserves the Raspberry Pi hardware environment while integrating the current VyOS Rolling ARM64 userspace.
-
-```text
-Pinned Armbian Raspberry Pi hardware base
-        │
-        ├── boot environment
-        ├── kernel
-        ├── Device Trees / overlays
-        ├── modules
-        └── firmware
-        │
-        ▼
-Raspberry Pi 4 / Raspberry Pi 5 base
-        ▲
-        │
-Current VyOS Rolling ARM64 root filesystem
-        │
-        ├── configuration system
-        ├── routing
-        ├── firewall / NAT
-        ├── DHCP
-        └── SSH
-        │
-        ▼
-Raspberry Pi integration
-        │
-        ├── first-boot DHCP / SSH
-        ├── AP helper
-        ├── modem helper
-        ├── network firmware
-        └── image validation
-        │
-        ▼
-Ready-to-flash VyOS image
-        │
-        ▼
-.img.xz + SHA256SUMS
-```
-
-The hardware base is intentionally pinned.
-
-This allows VyOS Rolling to be updated independently from the Raspberry Pi kernel and boot environment and makes hardware-base changes explicit, reproducible and independently testable.
+The build process keeps the Armbian-compatible physical image and Raspberry Pi boot environment, merges the VyOS root filesystem with the Raspberry Pi kernel components, injects the default configuration and helper scripts, and creates a flashable disk image.
 
 ---
 
@@ -570,66 +331,38 @@ This allows VyOS Rolling to be updated independently from the Raspberry Pi kerne
 
 Prebuilt images are published on the [GitHub Releases page](https://github.com/frogro/vyos-build-pi5/releases).
 
-The project uses two release types.
-
-### VyOS Raspberry Pi release
-
-This is the image intended for normal users.
-
-Release assets normally include:
+Each VyOS Raspberry Pi release should normally contain:
 
 ```text
 vyos-pi5-fresh.img.xz
 SHA256SUMS
 ```
 
-Despite the historical `pi5` filename, the generated image is intended for both **Raspberry Pi 4 and Raspberry Pi 5**.
+The raw `.img` file is too large to be convenient as a normal GitHub Release asset. Publish the compressed `.img.xz` file instead.
 
-The compressed image can be flashed directly with balenaEtcher or written from Linux with `xz` and `dd`.
+The pinned Armbian Raspberry Pi hardware base is maintained separately from normal user-facing VyOS image releases.
 
-See [CHANGELOG.md](CHANGELOG.md) and the individual GitHub Release notes for version and hardware-validation information.
-
-### Armbian hardware-base release
-
-The Raspberry Pi hardware base is published separately as a pinned build input.
-
-It contains the Raspberry Pi boot environment, kernel, Device Trees, overlays, modules and firmware used during VyOS image generation.
-
-The exact hardware-base release asset and checksum are recorded in:
-
-```text
-config/pi5-armbian-base.env
-```
-
-The checksum is verified before the base is used for a VyOS image build.
-
-Normal users should download the **VyOS Raspberry Pi release**, not the Armbian hardware-base image.
+See [CHANGELOG.md](CHANGELOG.md) for the changes in each release.
 
 ---
 
 ## License and Trademarks
 
-The repository contains or builds software from multiple upstream projects. Their respective licenses remain in effect.
+The repository contains or builds software from multiple upstream projects. Their respective licenses remain in effect. Review the license and copyright files included in the repository and generated image.
 
-“VyOS” and associated marks are trademarks of their respective owner.
+“VyOS” and associated marks are trademarks of their respective owner. “Armbian” and associated marks are trademarks of Armbian d.o.o. “Raspberry Pi” and associated marks are trademarks of Raspberry Pi Ltd.
 
-“Armbian” and associated marks are trademarks of their respective owner.
-
-“Raspberry Pi” and associated marks are trademarks of their respective owner.
-
-These names are used solely to identify compatibility, upstream software, boot/kernel components and supported hardware.
-
-No affiliation, sponsorship, certification or endorsement is claimed.
+These names are used solely to identify compatibility, upstream software, boot-chain and kernel components, and supported hardware. No affiliation, sponsorship, certification, or endorsement is claimed.
 
 This repository does not redistribute third-party logo artwork.
 
 ---
 
-## Support the Project
+## ❤️ Support the Project
 
-If this project saves you time or makes it easier to run VyOS on a **Raspberry Pi 4 or Raspberry Pi 5**, please consider supporting its development.
+If this project saved you time or made it easier to run VyOS on a Raspberry Pi 4 or Raspberry Pi 5, please consider supporting its development.
 
-Contributions help cover hardware, testing, maintenance and development time.
+Contributions help cover hardware, testing, maintenance, and development time.
 
 [![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/FGrootens)
 
