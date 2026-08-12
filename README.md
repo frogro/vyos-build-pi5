@@ -7,6 +7,8 @@
 [![Build Status](https://img.shields.io/github/actions/workflow/status/frogro/vyos-build-pi5/build-vyos-pi5.yml?branch=rolling&style=for-the-badge)](https://github.com/frogro/vyos-build-pi5/actions/workflows/build-vyos-pi5.yml)
 [![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/FGrootens)
 
+![VyOS Rolling for Raspberry Pi 4 / 5](docs/vyos-pi-banner.png)
+
 ## Table of Contents
 
 - [Features](#features)
