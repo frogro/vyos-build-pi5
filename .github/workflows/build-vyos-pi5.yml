@@ -114,7 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo rm -rf vyos-rootfs-fresh iso-extract
-          rm -rf vyos-build/build
+          sudo rm -rf vyos-build/build
           docker image rm vyos-build:rolling-arm64 2>/dev/null || true
           docker system prune -af 2>/dev/null || true
           df -h /
