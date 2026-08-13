@@ -7,6 +7,10 @@ on:
         description: "Exact vyos/vyos-build git ref or commit"
         required: true
         type: string
+      vyos_version:
+        description: "VyOS release version"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -55,7 +59,7 @@ jobs:
             -v "$(pwd)":/vyos \
             -w /vyos \
             vyos-build:rolling-arm64 \
-            sudo ./build-vyos-image --architecture arm64 generic
+            sudo ./build-vyos-image --architecture arm64 --build-type release --version "${{ inputs.vyos_version }}" generic
 
       - name: Locate VyOS ISO
         id: iso
