@@ -304,12 +304,13 @@ PY
 
 create_runtime_payload() {
     local libexec="${RUNTIME_ROOT}/usr/libexec/vyos"
+    local op_mode="${libexec}/op_mode"
     local systemd_dir="${RUNTIME_ROOT}/etc/systemd/system"
     local wants_dir="${systemd_dir}/multi-user.target.wants"
 
     echo "==> Creating A/B runtime payload"
 
-    mkdir -p "$libexec" "$wants_dir"
+    mkdir -p "$libexec" "$op_mode" "$wants_dir"
 
     for script in \
         vyos-pi-ab-status.py \
@@ -322,6 +323,11 @@ create_runtime_payload() {
             || fail "required A/B runtime script is missing: ${SCRIPT_DIR}/${script}"
         install -m 0755 "${SCRIPT_DIR}/${script}" "${libexec}/${script}"
     done
+
+    [[ -f "${SCRIPT_DIR}/vyos-pi-image-dispatch.py" ]] \
+        || fail "required A/B image dispatcher is missing: ${SCRIPT_DIR}/vyos-pi-image-dispatch.py"
+    install -m 0755 "${SCRIPT_DIR}/vyos-pi-image-dispatch.py" \
+        "${op_mode}/vyos_pi_image_dispatch.py"
 
     cat > "${systemd_dir}/vyos-pi-ab-auto-guard.service" <<'EOF'
 [Unit]
@@ -357,6 +363,7 @@ for name in (
     "vyos-pi-ab-healthcheck.py",
     "vyos-pi-ab-auto-guard.py",
     "install-vyos-pi-ab-update.py",
+    "vyos-pi-image-dispatch.py",
 ):
     path = root / name
     source = path.read_text(encoding="utf-8")
@@ -522,7 +529,7 @@ show_result() {
     echo "      payload/ab-runtime.tar"
 }
 
-echo "==> VyOS Raspberry Pi A/B update bundle builder v0.2"
+echo "==> VyOS Raspberry Pi A/B update bundle builder v0.3"
 echo "    Armbian base : $ARMBIAN_IMAGE"
 echo "    Merged rootfs: $MERGED_TAR"
 echo "    Output       : $OUT_BUNDLE"

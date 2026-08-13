@@ -2,7 +2,7 @@
 """
 VyOS Raspberry Pi A/B update bundle validator and inactive-slot installer.
 
-v0.3 supports two explicit modes:
+v0.4 supports two explicit modes:
 
   --dry-run   Validate the bundle and print the exact A/B update plan.
   --install   Erase and rewrite ONLY the inactive A/B slot, preserving its
@@ -18,8 +18,9 @@ The new slot must pass the separate healthcheck before it is committed as the
 new default. If it hangs before commit, the hardware watchdog/tryboot design
 allows the old default slot to return.
 
-v0.3 installs the automatic tryboot watchdog guard from the bundle runtime
-payload. It accepts local bundles only. Publisher signatures and URL downloads are
+v0.4 installs the automatic tryboot watchdog guard and the `add system image`
+dispatcher from the bundle runtime payload. It accepts local bundles only.
+Publisher signatures and URL downloads are
 deliberately deferred until the local write path is hardware-tested.
 """
 
@@ -915,6 +916,61 @@ def patch_target_root(root: Path, slot: str, target: dict[str, object]) -> None:
     os.chmod(marker, 0o644)
 
 
+
+def patch_target_add_system_image(root: Path) -> int:
+    """Route `add system image` through the Pi A/B dispatcher in this slot.
+
+    We patch only op-mode leaf node.def files that already invoke the upstream
+    image_installer.py for `--action add`. All other content/help/completion and
+    all upstream installer code remain untouched.
+    """
+    templates = (
+        root
+        / "opt/vyatta/share/vyatta-op/templates/add/system/image"
+    )
+    if not templates.is_dir():
+        raise ABError(
+            f"target root has no add/system/image op-mode templates: {templates}"
+        )
+
+    old = "${vyos_op_scripts_dir}/image_installer.py --action add"
+    new = "${vyos_op_scripts_dir}/vyos_pi_image_dispatch.py --action add"
+
+    replacements = 0
+    for path in sorted(templates.rglob("node.def")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ABError(f"cannot read op-mode template {path}: {exc}") from exc
+
+        count = text.count(old)
+        if not count:
+            continue
+
+        path.write_text(text.replace(old, new), encoding="utf-8")
+        replacements += count
+
+    if replacements == 0:
+        raise ABError(
+            "could not find any `add system image` image_installer.py leaf "
+            "commands to patch"
+        )
+
+    # A mixed state would make CLI behavior dependent on argument path.
+    leftovers: list[str] = []
+    for path in sorted(templates.rglob("node.def")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if old in text:
+            leftovers.append(str(path.relative_to(root)))
+
+    if leftovers:
+        raise ABError(
+            "some `add system image` commands still bypass the Pi dispatcher: "
+            + ", ".join(leftovers)
+        )
+
+    return replacements
+
 def patch_target_boot(boot: Path, target: dict[str, object]) -> None:
     config = boot / "config.txt"
     cmdline = boot / "cmdline.txt"
@@ -1145,6 +1201,48 @@ def validate_offline_slot(
                         f"{helper_name}"
                     )
 
+            dispatcher = (
+                root / "usr/libexec/vyos/op_mode/vyos_pi_image_dispatch.py"
+            )
+            if not dispatcher.is_file() or not os.access(dispatcher, os.X_OK):
+                raise ABError(
+                    f"ROOT-{slot} `add system image` Pi dispatcher is "
+                    "missing/not executable"
+                )
+
+            cli_templates = (
+                root
+                / "opt/vyatta/share/vyatta-op/templates/add/system/image"
+            )
+            dispatch_ref = (
+                "${vyos_op_scripts_dir}/vyos_pi_image_dispatch.py --action add"
+            )
+            upstream_ref = (
+                "${vyos_op_scripts_dir}/image_installer.py --action add"
+            )
+            dispatch_count = 0
+            bypasses: list[str] = []
+            for node_def in sorted(cli_templates.rglob("node.def")):
+                node_text = node_def.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                dispatch_count += node_text.count(dispatch_ref)
+                if upstream_ref in node_text:
+                    bypasses.append(str(node_def.relative_to(root)))
+
+            if dispatch_count == 0:
+                raise ABError(
+                    f"ROOT-{slot} has no `add system image` command routed "
+                    "through the Pi dispatcher"
+                )
+            if bypasses:
+                raise ABError(
+                    f"ROOT-{slot} still has `add system image` commands "
+                    "bypassing the Pi dispatcher: "
+                    + ", ".join(bypasses)
+                )
+
             guard_unit = (
                 root / "etc/systemd/system/vyos-pi-ab-auto-guard.service"
             )
@@ -1225,7 +1323,7 @@ def install_inactive_slot(
             rootfs_metadata=True,
         )
 
-        print("==> Installing A/B runtime and automatic watchdog guard")
+        print("==> Installing A/B runtime, watchdog guard and image dispatcher")
         extract_nested_tar(
             bundle,
             "payload/ab-runtime.tar",
@@ -1235,6 +1333,11 @@ def install_inactive_slot(
         )
 
         patch_target_root(root, slot, target)
+        patched_nodes = patch_target_add_system_image(root)
+        print(
+            f"==> Routed {patched_nodes} `add system image` op-mode command(s) "
+            "through the Pi A/B dispatcher"
+        )
 
         if copy_config:
             print("==> Copying active /config")
@@ -1331,7 +1434,7 @@ def print_plan(
         f"{BOOT_LABELS[target_slot]} (filesystem UUIDs preserved)"
     )
     print("  2. Extract rootfs payload into inactive root slot")
-    print("  3. Install A/B runtime + automatic tryboot watchdog guard")
+    print("  3. Install A/B runtime + watchdog guard + `add system image` dispatcher")
     print("  4. Extract boot payload into inactive boot slot")
     print(
         f"  5. Patch target /etc/fstab and cmdline.txt for slot {target_slot} "
@@ -1339,7 +1442,7 @@ def print_plan(
     )
     print("  6. Copy /config if selected")
     print("  7. Copy SSH host keys if selected")
-    print("  8. Validate inactive slot offline, including auto-guard enablement")
+    print("  8. Validate inactive slot offline, including auto-guard and CLI dispatch")
     print(
         f"  9. Keep {running_slot} as default and {target_slot} as the existing "
         "one-shot tryboot target"
@@ -1412,14 +1515,14 @@ def main() -> int:
     bundle = Path(args.bundle).expanduser()
     if "://" in args.bundle:
         raise ABError(
-            "v0.3 accepts local bundle files only; URL download will be added later"
+            "v0.4 accepts local bundle files only; URL download will be added later"
         )
     if not bundle.is_file():
         raise ABError(f"update bundle not found: {bundle}")
 
     check_unsaved_commits()
 
-    print("VyOS Raspberry Pi A/B update installer v0.3")
+    print("VyOS Raspberry Pi A/B update installer v0.4")
     print(f"Mode         : {'INSTALL inactive slot' if args.install else 'DRY RUN (read-only)'}")
     print(f"Bundle       : {bundle}")
     print()
@@ -1504,7 +1607,7 @@ def main() -> int:
         print()
         print("DRY RUN OK: no partitions or boot-control files were modified.")
         print(
-            "NOTE: v0.3 verifies SHA-256 integrity but does not yet provide a "
+            "NOTE: v0.4 verifies SHA-256 integrity but does not yet provide a "
             "cryptographic publisher signature."
         )
         return 0
@@ -1594,7 +1697,7 @@ def main() -> int:
         "hardware watchdog, run the healthcheck, and commit only if healthy."
     )
     print(
-        "NOTE: v0.3 verifies SHA-256 integrity but does not yet provide a "
+        "NOTE: v0.4 verifies SHA-256 integrity but does not yet provide a "
         "cryptographic publisher signature."
     )
     return 0
