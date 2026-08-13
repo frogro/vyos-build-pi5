@@ -28,8 +28,6 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
-
 ## [v2026.08.12-pi5] - 2026-08-12
 
 ### Raspberry Pi 5
