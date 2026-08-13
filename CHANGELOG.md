@@ -1,5 +1,16 @@
 # Changelog
 
+## v2026.08.12-0831-rolling-rpi
+
+- Synced VyOS userspace to official VyOS `2026.08.12-0831-rolling`.
+- ARM64 release build pinned to exact `vyos/vyos-build` commit `e14a4895cd5add37240fca9da195832b8a8683e3`.
+- Updated Raspberry Pi hardware base to `rpi-armbian-edge-7.1.8-vyos-parity`.
+- Kernel remains `7.1.8-edge-bcm2711` with expanded VyOS kernel feature parity while preserving Raspberry Pi hardware support.
+- Kernel modules use Zstandard compression; module dependency indexes are generated and validated.
+- Raspberry Pi 5 validation passed: boot, SSH, NTP, onboard 5 GHz Wi-Fi AP, DHCP, Ethernet WAN/NAT, FM350 USB/RNDIS and Ethernet-to-WWAN failover.
+- Full-image flashing remains the supported upgrade method for this release. A/B image upgrades are planned separately.
+
+
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
