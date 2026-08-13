@@ -1,7 +1,16 @@
-name: Build VyOS Raspberry Pi Image (Rolling + Armbian)
+name: Build VyOS Raspberry Pi Image (Pinned Rolling + Armbian)
 
 on:
   workflow_dispatch:
+    inputs:
+      vyos_ref:
+        description: "Exact vyos/vyos-build commit"
+        required: true
+        type: string
+      vyos_version:
+        description: "Official VyOS rolling version"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -12,15 +21,15 @@ jobs:
 
     steps:
       - name: Checkout Raspberry Pi build repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: repo
 
-      - name: Checkout current VyOS rolling
-        uses: actions/checkout@v4
+      - name: Checkout exact VyOS source
+        uses: actions/checkout@v6
         with:
           repository: vyos/vyos-build
-          ref: rolling
+          ref: ${{ inputs.vyos_ref }}
           path: vyos-build
 
       - name: Install required tools
@@ -38,6 +47,7 @@ jobs:
             e2fsprogs \
             dosfstools \
             curl \
+            jq \
             python3
 
       - name: Validate Raspberry Pi repository
@@ -52,7 +62,7 @@ jobs:
           cd vyos-build/docker
           docker build -t vyos-build:rolling-arm64 .
 
-      - name: Build current VyOS Rolling ARM64 image
+      - name: Build pinned VyOS Rolling ARM64 release image
         run: |
           set -euo pipefail
           cd vyos-build
@@ -61,7 +71,7 @@ jobs:
             -v "$(pwd)":/vyos \
             -w /vyos \
             vyos-build:rolling-arm64 \
-            sudo ./build-vyos-image --architecture arm64 generic
+            sudo ./build-vyos-image --architecture arm64 --build-type release --version "${{ inputs.vyos_version }}" generic
 
       - name: Extract and pack fresh VyOS ARM64 rootfs
         id: rootfs
@@ -94,6 +104,22 @@ jobs:
           test -x vyos-rootfs-fresh/bin/bash
           test -d vyos-rootfs-fresh/usr
           test -d vyos-rootfs-fresh/etc
+
+          VERSION_JSON="vyos-rootfs-fresh/usr/share/vyos/version.json"
+          test -f "$VERSION_JSON"
+
+          jq -e --arg v "${{ inputs.vyos_version }}" \
+            '.version == $v and .architecture == "arm64" and .build_type == "release"' \
+            "$VERSION_JSON"
+
+          grep -Fx "Version: ${{ inputs.vyos_version }}" \
+            vyos-rootfs-fresh/opt/vyatta/etc/version
+
+          if [[ "${{ inputs.vyos_ref }}" =~ ^[0-9a-f]{40}$ ]]; then
+            test "$VYOS_COMMIT" = "${{ inputs.vyos_ref }}"
+          fi
+
+          echo "VyOS release metadata validation: PASS"
 
           sudo tar \
             --numeric-owner \
@@ -197,7 +223,7 @@ jobs:
           TMP_WORK="$RUNNER_TEMP/pi5-tmp"
           mkdir -p "$OUT_DIR" "$TMP_WORK"
 
-          OUT_IMG="$OUT_DIR/vyos-pi5-fresh.img"
+          OUT_IMG="$OUT_DIR/vyos-${{ inputs.vyos_version }}-rpi-arm64.img"
 
           sudo env \
             TMPDIR="$TMP_WORK" \
@@ -218,13 +244,14 @@ jobs:
           set -euo pipefail
 
           OUT_DIR="$GITHUB_WORKSPACE/output"
-          OUT_IMG="$OUT_DIR/vyos-pi5-fresh.img"
+          OUT_IMG="$OUT_DIR/vyos-${{ inputs.vyos_version }}-rpi-arm64.img"
 
           xz -T0 -6 "$OUT_IMG"
+          xz -t "$OUT_IMG.xz"
 
           cd "$OUT_DIR"
 
-          sha256sum vyos-pi5-fresh.img.xz > SHA256SUMS
+          sha256sum vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz > SHA256SUMS
 
           ROOTFS_SHA="$(sha256sum "$GITHUB_WORKSPACE/vyos-rootfs-fresh.tar.gz" | awk '{print $1}')"
           IMAGE_SHA="$(awk '{print $1}' SHA256SUMS)"
@@ -261,7 +288,7 @@ jobs:
             echo "${{ steps.base.outputs.kernel }}"
             echo
             echo "Final image:"
-            echo "vyos-pi5-fresh.img.xz"
+            echo "vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz"
             echo
             echo "Final image SHA256:"
             echo "$IMAGE_SHA"
@@ -277,17 +304,17 @@ jobs:
           echo
           echo "===== OUTPUT ====="
           ls -lh \
-            vyos-pi5-fresh.img.xz \
+            vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz \
             SHA256SUMS \
             BUILD-INFO.txt \
             pi5-base-manifest.txt
 
       - name: Upload flashable Raspberry Pi VyOS image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vyos-pi5-image
           path: |
-            output/vyos-pi5-fresh.img.xz
+            output/vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz
             output/SHA256SUMS
             output/BUILD-INFO.txt
             output/pi5-base-manifest.txt
