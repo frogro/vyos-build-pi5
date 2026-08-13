@@ -8,7 +8,7 @@
 - Verified userspace parity: FRR `10.6.1-0`, Podman `5.8.4`, vyos-1x `999.0-14675-gba8924dd2`.
 - Raspberry Pi hardware base remains `rpi-armbian-edge-7.1.8-vyos-parity`.
 - Raspberry Pi kernel remains `7.1.8`.
-- Published automatically as a GitHub pre-release after static build and image QA.
+- Published automatically as the latest GitHub release after static build and image QA.
 - See the linked official VyOS release for the upstream VyOS changes contained in this build.
 - Full-image flashing remains supported; A/B update bundles remain experimental.
 
