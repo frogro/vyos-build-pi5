@@ -1,4 +1,5 @@
 name: Build VyOS Raspberry Pi Image (Pinned Rolling + Armbian)
+run-name: RPi ${{ inputs.vyos_version }} @ ${{ inputs.vyos_ref }}
 
 on:
   workflow_dispatch:
@@ -10,6 +11,21 @@ on:
       vyos_version:
         description: "Official VyOS rolling version"
         required: true
+        type: string
+      expected_frr_version:
+        description: "Expected FRR version from official ISO"
+        required: false
+        default: ""
+        type: string
+      expected_podman_version:
+        description: "Expected Podman version from official ISO"
+        required: false
+        default: ""
+        type: string
+      expected_vyos1x_version:
+        description: "Expected vyos-1x version from official ISO"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -76,6 +92,10 @@ jobs:
       - name: Extract and pack fresh VyOS ARM64 rootfs
         id: rootfs
         shell: bash
+        env:
+          EXPECTED_FRR: ${{ inputs.expected_frr_version }}
+          EXPECTED_PODMAN: ${{ inputs.expected_podman_version }}
+          EXPECTED_VYOS1X: ${{ inputs.expected_vyos1x_version }}
         run: |
           set -euo pipefail
 
@@ -120,6 +140,26 @@ jobs:
           fi
 
           echo "VyOS release metadata validation: PASS"
+
+          DPKG_ADM="$GITHUB_WORKSPACE/vyos-rootfs-fresh/var/lib/dpkg"
+
+          FRR_VERSION="$(dpkg-query --admindir="$DPKG_ADM" -W -f='${Version}' frr)"
+          PODMAN_VERSION="$(dpkg-query --admindir="$DPKG_ADM" -W -f='${Version}' podman)"
+          VYOS1X_VERSION="$(dpkg-query --admindir="$DPKG_ADM" -W -f='${Version}' vyos-1x)"
+
+          echo "FRR:     $FRR_VERSION"
+          echo "Podman:  $PODMAN_VERSION"
+          echo "vyos-1x: $VYOS1X_VERSION"
+
+          [ -z "$EXPECTED_FRR" ] || test "$FRR_VERSION" = "$EXPECTED_FRR"
+          [ -z "$EXPECTED_PODMAN" ] || test "$PODMAN_VERSION" = "$EXPECTED_PODMAN"
+          [ -z "$EXPECTED_VYOS1X" ] || test "$VYOS1X_VERSION" = "$EXPECTED_VYOS1X"
+
+          echo "frr_version=$FRR_VERSION" >> "$GITHUB_OUTPUT"
+          echo "podman_version=$PODMAN_VERSION" >> "$GITHUB_OUTPUT"
+          echo "vyos1x_version=$VYOS1X_VERSION" >> "$GITHUB_OUTPUT"
+
+          echo "VyOS package parity validation: PASS"
 
           sudo tar \
             --numeric-owner \
@@ -294,6 +334,34 @@ jobs:
             echo "$IMAGE_SHA"
           } > BUILD-INFO.txt
 
+          jq -n \
+            --arg version "${{ inputs.vyos_version }}" \
+            --arg vyos_commit "${{ steps.rootfs.outputs.vyos_commit }}" \
+            --arg rpi_repo_commit "$REPO_COMMIT" \
+            --arg frr "${{ steps.rootfs.outputs.frr_version }}" \
+            --arg podman "${{ steps.rootfs.outputs.podman_version }}" \
+            --arg vyos1x "${{ steps.rootfs.outputs.vyos1x_version }}" \
+            --arg base_tag "${{ steps.base.outputs.tag }}" \
+            --arg base_sha "${{ steps.base.outputs.sha256 }}" \
+            --arg kernel "${{ steps.base.outputs.kernel }}" \
+            --arg image "vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz" \
+            --arg image_sha "$IMAGE_SHA" \
+            '{
+              version: $version,
+              architecture: "arm64",
+              build_type: "release",
+              vyos_build_commit: $vyos_commit,
+              rpi_build_repo_commit: $rpi_repo_commit,
+              frr_version: $frr,
+              podman_version: $podman,
+              vyos_1x_version: $vyos1x,
+              hardware_base_tag: $base_tag,
+              hardware_base_sha256: $base_sha,
+              kernel: $kernel,
+              image: $image,
+              image_sha256: $image_sha
+            }' > manifest.json
+
           cp "$PI5_BASE_MANIFEST" ./pi5-base-manifest.txt
 
           echo "===== SHA256SUMS ====="
@@ -307,6 +375,7 @@ jobs:
             vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz \
             SHA256SUMS \
             BUILD-INFO.txt \
+            manifest.json \
             pi5-base-manifest.txt
 
       - name: Upload flashable Raspberry Pi VyOS image
@@ -317,6 +386,7 @@ jobs:
             output/vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz
             output/SHA256SUMS
             output/BUILD-INFO.txt
+            output/manifest.json
             output/pi5-base-manifest.txt
           retention-days: 30
           if-no-files-found: error
