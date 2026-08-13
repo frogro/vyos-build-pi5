@@ -312,7 +312,7 @@ jobs:
 
           echo "Complete automated Raspberry Pi artifact QA: PASS"
 
-      - name: Publish automated Raspberry Pi pre-release
+      - name: Publish automated Raspberry Pi release
         if: ${{ steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
         shell: bash
         env:
@@ -402,9 +402,9 @@ jobs:
 
           ## Hardware validation status
 
-          Automatically generated Nightlies are published as pre-releases because GitHub Actions cannot physically boot-test every generated image.
+          Automatically generated Raspberry Pi builds are published after passing the automated validation checks. GitHub Actions cannot physically boot-test every generated image.
 
-          The pinned Raspberry Pi hardware base has been hardware-tested separately.
+          The Raspberry Pi-specific hardware stack used by these builds — including the kernel, boot configuration, Device Trees, firmware and drivers — has been validated on physical Raspberry Pi 5 hardware.
 
           ## Installation and upgrades
 
@@ -425,7 +425,7 @@ jobs:
             --target "$RPI_COMMIT" \
             --title "VyOS ${VERSION} for Raspberry Pi 4 / 5" \
             --notes-file RELEASE-NOTES.md \
-            --prerelease
+            --latest
 
       - name: Update project changelog
         if: ${{ steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
@@ -477,7 +477,7 @@ jobs:
           - Verified userspace parity: FRR `{frr}`, Podman `{podman}`, vyos-1x `{vyos1x}`.
           - Raspberry Pi hardware base remains `{base}`.
           - Raspberry Pi kernel remains `{kernel}`.
-          - Published automatically as a GitHub pre-release after static build and image QA.
+          - Published automatically as the latest GitHub release after static build and image QA.
           - See the linked official VyOS release for the upstream VyOS changes contained in this build.
           - Full-image flashing remains supported; A/B update bundles remain experimental.
 
