@@ -82,6 +82,11 @@ jobs:
             "https://api.github.com/repos/vyos/vyos-nightly-build/releases/tags/$VERSION" \
             -o upstream-release.json
 
+          UPSTREAM_NAME="$(jq -r '.name // .tag_name' upstream-release.json)"
+          UPSTREAM_PUBLISHED="$(jq -r '.published_at // ""' upstream-release.json)"
+          UPSTREAM_URL="$(jq -r '.html_url' upstream-release.json)"
+          jq -r '.body // ""' upstream-release.json > upstream-release-body.md
+
           ISO_URL="$(
             jq -r '
               .assets[]
@@ -197,7 +202,9 @@ jobs:
             echo "frr_version=$FRR_VERSION"
             echo "podman_version=$PODMAN_VERSION"
             echo "vyos1x_version=$VYOS1X_VERSION"
-            echo "upstream_release_url=https://github.com/vyos/vyos-nightly-build/releases/tag/$VERSION"
+            echo "upstream_name=$UPSTREAM_NAME"
+            echo "upstream_published=$UPSTREAM_PUBLISHED"
+            echo "upstream_release_url=$UPSTREAM_URL"
           } >> "$GITHUB_OUTPUT"
 
       - name: Dispatch pinned Raspberry Pi build
@@ -315,6 +322,8 @@ jobs:
           FRR_VERSION: ${{ steps.upstream.outputs.frr_version }}
           PODMAN_VERSION: ${{ steps.upstream.outputs.podman_version }}
           VYOS1X_VERSION: ${{ steps.upstream.outputs.vyos1x_version }}
+          UPSTREAM_NAME: ${{ steps.upstream.outputs.upstream_name }}
+          UPSTREAM_PUBLISHED: ${{ steps.upstream.outputs.upstream_published }}
           UPSTREAM_URL: ${{ steps.upstream.outputs.upstream_release_url }}
         run: |
           set -euo pipefail
@@ -331,58 +340,84 @@ jobs:
           BASE_TAG="$(jq -r '.hardware_base_tag' artifact/manifest.json)"
           RPI_COMMIT="$(jq -r '.rpi_build_repo_commit' artifact/manifest.json)"
 
-          cat > RELEASE-NOTES.md <<EOF
+          cat <<EOF | sed 's/^          //' > RELEASE-NOTES.md
           # VyOS ${VERSION} for Raspberry Pi 4 / 5
 
-          Unofficial automated ARM64 community build of VyOS Rolling for Raspberry Pi.
+          Unofficial Raspberry Pi ARM64 build based directly on the corresponding official VyOS Rolling Nightly.
 
-          ## VyOS base
+          ## Official VyOS Rolling release
 
-          - Official VyOS Rolling release: \`${VERSION}\`
+          - Release: \`${UPSTREAM_NAME}\`
+          - Version: \`${VERSION}\`
+          - Published: \`${UPSTREAM_PUBLISHED}\`
+          - Official release: ${UPSTREAM_URL}
           - Exact \`vyos/vyos-build\` commit: \`${VYOS_REF}\`
-          - Architecture: \`arm64\`
-          - Build type: \`release\`
-          - Upstream release: ${UPSTREAM_URL}
 
-          ## Userspace parity checks
+          The VyOS userspace in this Raspberry Pi image is built from the exact source snapshot identified by this official Rolling release.
 
-          Versions were compared against the signed official AMD64 VyOS ISO:
+          ## Official VyOS release notes
+
+          EOF
+
+          if [ -s upstream-release-body.md ]; then
+            cat upstream-release-body.md >> RELEASE-NOTES.md
+          else
+            echo "No upstream release notes were supplied for this Nightly." >> RELEASE-NOTES.md
+          fi
+
+          cat <<EOF | sed 's/^          //' >> RELEASE-NOTES.md
+
+          ## Verified userspace parity
+
+          Compared against the signed official VyOS AMD64 ISO:
 
           - FRR: \`${FRR_VERSION}\`
           - Podman: \`${PODMAN_VERSION}\`
           - vyos-1x: \`${VYOS1X_VERSION}\`
 
-          ## Raspberry Pi hardware base
+          ## Raspberry Pi adaptation
 
-          - Hardware base: \`${BASE_TAG}\`
+          - Architecture: \`arm64\`
+          - Build type: \`release\`
+          - Raspberry Pi hardware base: \`${BASE_TAG}\`
           - Kernel: \`${KERNEL}\`
 
-          The Raspberry Pi kernel, firmware, Device Trees and boot environment are board-specific.
-          The VyOS userspace is built from the exact source commit identified by the official Rolling ISO.
+          The Raspberry Pi-specific kernel, boot environment, Device Trees, kernel modules and firmware are supplied by the pinned Raspberry Pi hardware base.
 
-          ## Automated QA
+          ## Automated validation
 
-          This release passed:
+          This build passed:
 
           - official VyOS ISO Minisign verification
-          - official version/source-commit extraction
-          - ARM64 release-version validation
-          - FRR/Podman/vyos-1x version parity checks
+          - official VyOS version validation
+          - exact upstream source-commit resolution
+          - ARM64 release metadata validation
+          - FRR package-version parity
+          - Podman package-version parity
+          - vyos-1x package-version parity
           - pinned Raspberry Pi hardware-base SHA256 validation
-          - Raspberry Pi DTB/module/firmware validation
+          - Raspberry Pi kernel/module/DTB/firmware validation
           - final image SHA256 verification
           - XZ integrity validation
 
-          This automatically generated build is published as a **pre-release** because each new Nightly cannot be boot-tested on physical Raspberry Pi hardware by GitHub Actions.
+          ## Hardware validation status
 
-          Full-image flashing remains the supported installation/update method. The experimental A/B update bundle is not included yet.
+          Automatically generated Nightlies are published as pre-releases because GitHub Actions cannot physically boot-test every generated image.
+
+          The pinned Raspberry Pi hardware base has been hardware-tested separately.
+
+          ## Installation and upgrades
+
+          Use the supplied \`.img.xz\` image for installation.
+
+          Full-image flashing remains the supported update method.
+
+          The planned Raspberry Pi A/B update mechanism and \`update.tar.zst\` bundle are not included until boot, rollback and recovery have been hardware-tested.
 
           ## Disclaimer
 
-          This is an unofficial community build and is not an official VyOS image.
+          This is an unofficial community Raspberry Pi build and is not an official VyOS image.
           EOF
-
-          sed -i 's/^          //' RELEASE-NOTES.md
 
           gh release create "$TAG" \
             artifact/* \
@@ -401,6 +436,7 @@ jobs:
           FRR_VERSION: ${{ steps.upstream.outputs.frr_version }}
           PODMAN_VERSION: ${{ steps.upstream.outputs.podman_version }}
           VYOS1X_VERSION: ${{ steps.upstream.outputs.vyos1x_version }}
+          UPSTREAM_URL: ${{ steps.upstream.outputs.upstream_release_url }}
         run: |
           set -euo pipefail
 
@@ -420,6 +456,7 @@ jobs:
           frr = os.environ["FRR_VERSION"]
           podman = os.environ["PODMAN_VERSION"]
           vyos1x = os.environ["VYOS1X_VERSION"]
+          upstream_url = os.environ["UPSTREAM_URL"]
           kernel = os.environ["KERNEL"]
           base = os.environ["BASE_TAG"]
 
@@ -434,13 +471,15 @@ jobs:
           entry = f"""
           {heading}
 
-          - Automated Raspberry Pi build synchronized to official VyOS `{version}`.
+          - Synchronized to official VyOS Rolling `{version}`.
+          - Official upstream release: {upstream_url}
           - Exact `vyos/vyos-build` commit: `{ref}`.
           - Verified userspace parity: FRR `{frr}`, Podman `{podman}`, vyos-1x `{vyos1x}`.
-          - Raspberry Pi hardware base: `{base}`.
-          - Kernel: `{kernel}`.
+          - Raspberry Pi hardware base remains `{base}`.
+          - Raspberry Pi kernel remains `{kernel}`.
           - Published automatically as a GitHub pre-release after static build and image QA.
-          - Full-image flashing remains the supported update method; A/B update bundles remain experimental.
+          - See the linked official VyOS release for the upstream VyOS changes contained in this build.
+          - Full-image flashing remains supported; A/B update bundles remain experimental.
 
           """
 
