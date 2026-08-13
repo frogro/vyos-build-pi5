@@ -2,7 +2,7 @@
 """
 Dispatch `add system image` on VyOS Raspberry Pi A/B systems.
 
-Local Raspberry Pi A/B update bundles (*.tar.zst) are handed to
+Local or HTTP(S) Raspberry Pi A/B update bundles (*.tar.zst) are handed to
 install-vyos-pi-ab-update.py. Everything else is exec'd unchanged into the
 original VyOS op-mode image_installer.py, preserving normal ISO/URL/latest
 behavior.
@@ -21,10 +21,15 @@ from pathlib import Path
 import subprocess
 import sys
 from urllib.parse import urlparse
+from uuid import uuid4
+
+from vyos.remote import download
 
 ORIGINAL_INSTALLER = Path("/usr/libexec/vyos/op_mode/image_installer.py")
 AB_INSTALLER = Path("/usr/libexec/vyos/install-vyos-pi-ab-update.py")
+SIMPLE_DOWNLOAD = Path("/usr/libexec/vyos/simple-download.py")
 DT_BASE = Path("/proc/device-tree/chosen/bootloader")
+SUPPORTED_REMOTE_SCHEMES = {"http", "https"}
 
 AB_LABELS = (
     "VYOS_AB",
@@ -103,11 +108,79 @@ def is_raspberry_pi_ab_system() -> bool:
     return (root_label, boot_label) in valid_pairs
 
 
-def is_remote_or_latest(image_path: str) -> bool:
-    if image_path == "latest":
-        return True
+def is_remote_ab_candidate(image_path: str) -> bool:
     parsed = urlparse(image_path)
-    return bool(parsed.scheme)
+    return (
+        parsed.scheme.lower() in SUPPORTED_REMOTE_SCHEMES
+        and parsed.path.lower().endswith(".tar.zst")
+    )
+
+
+def configure_remote_credentials(username: str, password: str) -> None:
+    # Match upstream image_installer.py semantics: vyos.remote.download and
+    # simple-download.py consume these environment variables implicitly.
+    os.environ["REMOTE_USERNAME"] = username
+    os.environ["REMOTE_PASSWORD"] = password
+
+
+def download_remote_bundle(
+    remote_path: str,
+    vrf: str | None,
+    username: str,
+    password: str,
+) -> Path:
+    configure_remote_credentials(username, password)
+
+    local_path = Path.home() / f".vyos-rpi-ab-{uuid4()}.tar.zst"
+    try:
+        print(f"Downloading Raspberry Pi A/B bundle: {remote_path}")
+        if vrf is None:
+            download(
+                str(local_path),
+                remote_path,
+                progressbar=True,
+                check_space=True,
+                raise_error=True,
+            )
+        else:
+            if not SIMPLE_DOWNLOAD.is_file():
+                raise DispatchError(
+                    f"VyOS VRF download helper is missing: {SIMPLE_DOWNLOAD}"
+                )
+            result = subprocess.run(
+                [
+                    "ip",
+                    "vrf",
+                    "exec",
+                    vrf,
+                    str(SIMPLE_DOWNLOAD),
+                    "--local-file",
+                    str(local_path),
+                    "--remote-path",
+                    remote_path,
+                ],
+                check=False,
+                env=os.environ.copy(),
+            )
+            if result.returncode != 0:
+                raise DispatchError(
+                    f"VRF download failed with exit code {result.returncode}"
+                )
+
+        if not local_path.is_file() or local_path.stat().st_size == 0:
+            raise DispatchError("download completed without a usable bundle file")
+
+        print(
+            f"Downloaded bundle : {local_path} "
+            f"({local_path.stat().st_size} bytes)"
+        )
+        return local_path
+    except Exception:
+        try:
+            local_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def read_ab_manifest(path: Path) -> dict[str, object] | None:
@@ -127,6 +200,57 @@ def read_ab_manifest(path: Path) -> dict[str, object] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def validate_ab_bundle(path: Path) -> None:
+    manifest = read_ab_manifest(path)
+    if manifest is None:
+        raise DispatchError(
+            f"{path} does not contain a readable Raspberry Pi A/B manifest.json"
+        )
+
+    if manifest.get("format") != "vyos-rpi-ab-update":
+        raise DispatchError(
+            f"{path} is not a VyOS Raspberry Pi A/B update bundle "
+            f"(format={manifest.get('format')!r})"
+        )
+    if manifest.get("platform") != "raspberry-pi":
+        raise DispatchError(
+            f"{path} has unsupported A/B platform "
+            f"{manifest.get('platform')!r}"
+        )
+
+
+def run_ab_installer(
+    local_path: Path,
+    *,
+    source: str,
+    no_prompt: bool,
+) -> int:
+    if not AB_INSTALLER.is_file():
+        raise DispatchError(f"Raspberry Pi A/B installer is missing: {AB_INSTALLER}")
+
+    command = [
+        sys.executable,
+        str(AB_INSTALLER),
+        "--install",
+    ]
+
+    # Upstream image_installer.py copies configuration and SSH host keys in
+    # --no-prompt mode. Preserve that semantic for the A/B path.
+    if no_prompt:
+        command += ["--yes-config", "--yes-ssh-keys"]
+
+    command.append(str(local_path))
+
+    print("VyOS Raspberry Pi A/B image dispatcher")
+    print(f"Source          : {source}")
+    print(f"Detected bundle : {local_path}")
+    print("Backend         : native Raspberry Pi A/B installer")
+    print()
+
+    result = subprocess.run(command, check=False)
+    return result.returncode
 
 
 def exec_original() -> None:
@@ -153,45 +277,27 @@ def parse_dispatch_args() -> tuple[argparse.Namespace, list[str]]:
 def main() -> int:
     args, unknown = parse_dispatch_args()
 
-    # Only intercept the op-mode `add` action. `install`, malformed invocations,
-    # URLs and `latest` retain upstream VyOS behavior.
+    # Only intercept the op-mode `add` action. `install`, malformed invocations
+    # and `latest` retain upstream VyOS behavior.
     if args.action != "add" or not args.image_path:
         exec_original()
 
-    if is_remote_or_latest(args.image_path):
+    if args.image_path == "latest":
         exec_original()
 
-    local_path = Path(args.image_path).expanduser()
-    if not local_path.is_file():
-        # Preserve upstream local-path error handling for normal ISO paths.
-        exec_original()
-
+    # Never change standard VyOS behavior outside our exact Raspberry Pi A/B
+    # layout.
     if not is_raspberry_pi_ab_system():
         exec_original()
 
-    # A .tar.zst on an A/B Pi is reserved for our native A/B update format.
-    # Do not let an invalid bundle fall through to ISO mounting, which would
-    # produce a misleading iso9660 error.
-    if not local_path.name.endswith(".tar.zst"):
+    parsed = urlparse(args.image_path)
+    remote_candidate = is_remote_ab_candidate(args.image_path)
+    local_candidate = not parsed.scheme and args.image_path.lower().endswith(".tar.zst")
+
+    # Non-A/B-looking paths retain upstream VyOS behavior, including normal
+    # local/remote ISO images.
+    if not remote_candidate and not local_candidate:
         exec_original()
-
-    manifest = read_ab_manifest(local_path)
-    if manifest is None:
-        raise DispatchError(
-            f"{local_path} is a .tar.zst file but does not contain a readable "
-            "Raspberry Pi A/B manifest.json"
-        )
-
-    if manifest.get("format") != "vyos-rpi-ab-update":
-        raise DispatchError(
-            f"{local_path} is not a VyOS Raspberry Pi A/B update bundle "
-            f"(format={manifest.get('format')!r})"
-        )
-    if manifest.get("platform") != "raspberry-pi":
-        raise DispatchError(
-            f"{local_path} has unsupported A/B platform "
-            f"{manifest.get('platform')!r}"
-        )
 
     if unknown:
         raise DispatchError(
@@ -202,29 +308,46 @@ def main() -> int:
         raise DispatchError(
             "--force is not supported for Raspberry Pi A/B update bundles"
         )
-    if not AB_INSTALLER.is_file():
-        raise DispatchError(f"Raspberry Pi A/B installer is missing: {AB_INSTALLER}")
 
-    command = [
-        sys.executable,
-        str(AB_INSTALLER),
-        "--install",
-    ]
+    downloaded_path: Path | None = None
+    if remote_candidate:
+        try:
+            downloaded_path = download_remote_bundle(
+                args.image_path,
+                args.vrf,
+                args.username,
+                args.password,
+            )
+            validate_ab_bundle(downloaded_path)
+            return run_ab_installer(
+                downloaded_path,
+                source=args.image_path,
+                no_prompt=args.no_prompt,
+            )
+        except DispatchError:
+            raise
+        except Exception as exc:
+            raise DispatchError(
+                f"could not download/install Raspberry Pi A/B bundle: {exc}"
+            ) from exc
+        finally:
+            if downloaded_path is not None:
+                try:
+                    downloaded_path.unlink()
+                    print(f"Removed download  : {downloaded_path}")
+                except FileNotFoundError:
+                    pass
 
-    # Upstream image_installer.py copies configuration and SSH host keys in
-    # --no-prompt mode. Preserve that semantic for the A/B path.
-    if args.no_prompt:
-        command += ["--yes-config", "--yes-ssh-keys"]
+    local_path = Path(args.image_path).expanduser()
+    if not local_path.is_file():
+        raise DispatchError(f"Raspberry Pi A/B update bundle not found: {local_path}")
 
-    command.append(str(local_path))
-
-    print("VyOS Raspberry Pi A/B image dispatcher")
-    print(f"Detected bundle : {local_path}")
-    print("Backend         : native Raspberry Pi A/B installer")
-    print()
-
-    result = subprocess.run(command, check=False)
-    return result.returncode
+    validate_ab_bundle(local_path)
+    return run_ab_installer(
+        local_path,
+        source=str(local_path),
+        no_prompt=args.no_prompt,
+    )
 
 
 if __name__ == "__main__":
