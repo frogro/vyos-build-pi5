@@ -1,5 +1,18 @@
 # Changelog
 
+## v2026.08.13-0024-rolling-rpi
+
+- Synchronized to official VyOS Rolling `2026.08.13-0024-rolling`.
+- Official upstream release: https://github.com/vyos/vyos-nightly-build/releases/tag/2026.08.13-0024-rolling
+- Exact `vyos/vyos-build` commit: `e14a4895cd5add37240fca9da195832b8a8683e3`.
+- Verified userspace parity: FRR `10.6.1-0`, Podman `5.8.4`, vyos-1x `999.0-14675-gba8924dd2`.
+- Raspberry Pi hardware base remains `rpi-armbian-edge-7.1.8-vyos-parity`.
+- Raspberry Pi kernel remains `7.1.8`.
+- Published automatically as a GitHub pre-release after static build and image QA.
+- See the linked official VyOS release for the upstream VyOS changes contained in this build.
+- Full-image flashing remains supported; A/B update bundles remain experimental.
+
+
 ## v2026.08.12-0831-rolling-rpi
 
 - Synced VyOS userspace to official VyOS `2026.08.12-0831-rolling`.
