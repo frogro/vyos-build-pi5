@@ -3,15 +3,18 @@ set -euo pipefail
 
 # Build a VyOS Raspberry Pi A/B update bundle.
 #
-# Bundle format v1:
+# Bundle format v2:
 #   manifest.json
 #   SHA256SUMS
 #   payload/rootfs.tar.gz
 #   payload/boot.tar
+#   payload/ab-runtime.tar
 #
 # The rootfs payload is the merged VyOS Raspberry Pi rootfs produced by
 # merge-vyos-pi5.sh. The boot payload is copied read-only from the same pinned
 # Armbian Raspberry Pi hardware base used by the full-image builder.
+# The runtime payload installs the A/B status/commit/healthcheck/update tools
+# plus an automatic tryboot watchdog guard systemd service into the new slot.
 #
 # Usage:
 #   sudo ./scripts/pi5/build-vyos-pi-ab-update.sh \
@@ -41,7 +44,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BASE_ENV="${PI5_BASE_ENV:-${REPO_ROOT}/config/pi5-armbian-base.env}"
 
 for cmd in xz cp stat losetup blkid mount umount mountpoint tar zstd \
-           sha256sum python3 sync mkdir rm mv awk grep mktemp date dirname sleep; do
+           sha256sum python3 sync mkdir rm mv awk grep mktemp date dirname sleep \
+           install cat ln; do
     command -v "$cmd" >/dev/null 2>&1 || {
         echo "ERROR: required command is missing: $cmd" >&2
         exit 1
@@ -60,7 +64,7 @@ fail() {
 
 case "$MERGED_TAR" in
     *.tar.gz|*.tgz) ;;
-    *) fail "v1 update builder currently requires a gzip-compressed rootfs tar (.tar.gz/.tgz)" ;;
+    *) fail "v2 update builder currently requires a gzip-compressed rootfs tar (.tar.gz/.tgz)" ;;
 esac
 
 [[ "$ZSTD_LEVEL" =~ ^[0-9]+$ ]] || fail "ZSTD_LEVEL must be an integer"
@@ -108,9 +112,11 @@ STAGE="${WORK}/stage"
 PAYLOAD="${STAGE}/payload"
 BOOT_TAR="${PAYLOAD}/boot.tar"
 ROOTFS_PAYLOAD="${PAYLOAD}/rootfs.tar.gz"
+RUNTIME_TAR="${PAYLOAD}/ab-runtime.tar"
+RUNTIME_ROOT="${WORK}/runtime-root"
 SRC_LOOP=""
 
-mkdir -p "$SRC_BOOT_MNT" "$PAYLOAD"
+mkdir -p "$SRC_BOOT_MNT" "$PAYLOAD" "$RUNTIME_ROOT"
 
 cleanup() {
     set +e
@@ -296,6 +302,68 @@ print(f"    Kernel  : {kernel_version}")
 PY
 }
 
+create_runtime_payload() {
+    local libexec="${RUNTIME_ROOT}/usr/libexec/vyos"
+    local systemd_dir="${RUNTIME_ROOT}/etc/systemd/system"
+    local wants_dir="${systemd_dir}/multi-user.target.wants"
+
+    echo "==> Creating A/B runtime payload"
+
+    mkdir -p "$libexec" "$wants_dir"
+
+    for script in \
+        vyos-pi-ab-status.py \
+        vyos-pi-ab-commit.py \
+        vyos-pi-ab-healthcheck.py \
+        vyos-pi-ab-auto-guard.py \
+        install-vyos-pi-ab-update.py
+    do
+        [[ -f "${SCRIPT_DIR}/${script}" ]] \
+            || fail "required A/B runtime script is missing: ${SCRIPT_DIR}/${script}"
+        install -m 0755 "${SCRIPT_DIR}/${script}" "${libexec}/${script}"
+    done
+
+    cat > "${systemd_dir}/vyos-pi-ab-auto-guard.service" <<'EOF'
+[Unit]
+Description=VyOS Raspberry Pi A/B automatic tryboot watchdog guard
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/libexec/vyos/vyos-pi-ab-auto-guard.py
+Environment=PYTHONUNBUFFERED=1
+Restart=no
+TimeoutStopSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    ln -s ../vyos-pi-ab-auto-guard.service \
+        "${wants_dir}/vyos-pi-ab-auto-guard.service"
+
+    tar -C "$RUNTIME_ROOT" \
+        --numeric-owner \
+        -cf "$RUNTIME_TAR" .
+
+    python3 - "$SCRIPT_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+for name in (
+    "vyos-pi-ab-status.py",
+    "vyos-pi-ab-commit.py",
+    "vyos-pi-ab-healthcheck.py",
+    "vyos-pi-ab-auto-guard.py",
+    "install-vyos-pi-ab-update.py",
+):
+    path = root / name
+    source = path.read_text(encoding="utf-8")
+    compile(source, str(path), "exec")
+PY
+}
+
 create_payloads() {
     echo "==> Copying merged rootfs payload"
     cp --reflink=auto -- "$MERGED_TAR" "$ROOTFS_PAYLOAD"
@@ -305,15 +373,18 @@ create_payloads() {
         --numeric-owner \
         -cf "$BOOT_TAR" .
 
+    create_runtime_payload
     sync
 }
 
 create_manifest() {
-    local root_sha boot_sha root_size boot_size source_epoch
+    local root_sha boot_sha runtime_sha root_size boot_size runtime_size source_epoch
     root_sha="$(sha256_file "$ROOTFS_PAYLOAD")"
     boot_sha="$(sha256_file "$BOOT_TAR")"
+    runtime_sha="$(sha256_file "$RUNTIME_TAR")"
     root_size="$(stat -c '%s' "$ROOTFS_PAYLOAD")"
     boot_size="$(stat -c '%s' "$BOOT_TAR")"
+    runtime_size="$(stat -c '%s' "$RUNTIME_TAR")"
 
     if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
         source_epoch="$SOURCE_DATE_EPOCH"
@@ -326,6 +397,7 @@ create_manifest() {
         "$STAGE/manifest.json" \
         "$root_sha" "$root_size" \
         "$boot_sha" "$boot_size" \
+        "$runtime_sha" "$runtime_size" \
         "$ARMBIAN_SHA" "$(sha256_file "$MERGED_TAR")" \
         "$source_epoch" <<'PY'
 from __future__ import annotations
@@ -341,15 +413,17 @@ root_sha = sys.argv[3]
 root_size = int(sys.argv[4])
 boot_sha = sys.argv[5]
 boot_size = int(sys.argv[6])
-armbian_sha = sys.argv[7]
-merged_sha = sys.argv[8]
-epoch = int(sys.argv[9])
+runtime_sha = sys.argv[7]
+runtime_size = int(sys.argv[8])
+armbian_sha = sys.argv[9]
+merged_sha = sys.argv[10]
+epoch = int(sys.argv[11])
 
 meta = json.loads(rootfs_meta_path.read_text(encoding="utf-8"))
 
 manifest = {
     "format": "vyos-rpi-ab-update",
-    "format_version": 1,
+    "format_version": 2,
     "platform": "raspberry-pi",
     "architecture": meta["architecture"],
     "flavor": meta["flavor"],
@@ -370,6 +444,12 @@ manifest = {
             "archive": "tar",
             "sha256": boot_sha,
             "size": boot_size,
+        },
+        "runtime": {
+            "path": "payload/ab-runtime.tar",
+            "archive": "tar",
+            "sha256": runtime_sha,
+            "size": runtime_size,
         },
     },
     "required_layout": {
@@ -393,7 +473,8 @@ PY
 
     (
         cd "$STAGE"
-        sha256sum manifest.json payload/rootfs.tar.gz payload/boot.tar > SHA256SUMS
+        sha256sum manifest.json payload/rootfs.tar.gz payload/boot.tar \
+            payload/ab-runtime.tar > SHA256SUMS
     )
 }
 
@@ -410,6 +491,7 @@ create_bundle() {
         --mtime="@${epoch}" \
         -cf - \
         manifest.json SHA256SUMS payload/rootfs.tar.gz payload/boot.tar \
+        payload/ab-runtime.tar \
       | zstd -q -T0 "-${ZSTD_LEVEL}" -o "$tmp_bundle"
 
     zstd -q -t "$tmp_bundle"
@@ -437,9 +519,10 @@ show_result() {
     echo "      SHA256SUMS"
     echo "      payload/rootfs.tar.gz"
     echo "      payload/boot.tar"
+    echo "      payload/ab-runtime.tar"
 }
 
-echo "==> VyOS Raspberry Pi A/B update bundle builder v0.1"
+echo "==> VyOS Raspberry Pi A/B update bundle builder v0.2"
 echo "    Armbian base : $ARMBIAN_IMAGE"
 echo "    Merged rootfs: $MERGED_TAR"
 echo "    Output       : $OUT_BUNDLE"

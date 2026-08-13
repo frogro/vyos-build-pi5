@@ -2,7 +2,7 @@
 """
 VyOS Raspberry Pi A/B update bundle validator and inactive-slot installer.
 
-v0.2 supports two explicit modes:
+v0.3 supports two explicit modes:
 
   --dry-run   Validate the bundle and print the exact A/B update plan.
   --install   Erase and rewrite ONLY the inactive A/B slot, preserving its
@@ -18,7 +18,8 @@ The new slot must pass the separate healthcheck before it is committed as the
 new default. If it hangs before commit, the hardware watchdog/tryboot design
 allows the old default slot to return.
 
-v0.2 accepts local bundles only. Publisher signatures and URL downloads are
+v0.3 installs the automatic tryboot watchdog guard from the bundle runtime
+payload. It accepts local bundles only. Publisher signatures and URL downloads are
 deliberately deferred until the local write path is hardware-tested.
 """
 
@@ -48,6 +49,7 @@ EXPECTED_BUNDLE_MEMBERS = (
     "SHA256SUMS",
     "payload/rootfs.tar.gz",
     "payload/boot.tar",
+    "payload/ab-runtime.tar",
 )
 
 EXPECTED_LAYOUT = {
@@ -516,7 +518,7 @@ def validate_bundle(bundle: Path) -> dict[str, object]:
 
     expected = {
         "format": "vyos-rpi-ab-update",
-        "format_version": 1,
+        "format_version": 2,
         "platform": "raspberry-pi",
         "architecture": "arm64",
     }
@@ -551,6 +553,7 @@ def validate_bundle(bundle: Path) -> dict[str, object]:
     for key, expected_path, expected_archive in (
         ("rootfs", "payload/rootfs.tar.gz", "tar.gz"),
         ("boot", "payload/boot.tar", "tar"),
+        ("runtime", "payload/ab-runtime.tar", "tar"),
     ):
         item = payload.get(key)
         if not isinstance(item, dict):
@@ -673,12 +676,18 @@ def validate_capacity(manifest: dict[str, object], target: dict[str, object]) ->
 
     root_payload = payload.get("rootfs")
     boot_payload = payload.get("boot")
-    if not isinstance(root_payload, dict) or not isinstance(boot_payload, dict):
+    runtime_payload = payload.get("runtime")
+    if (
+        not isinstance(root_payload, dict)
+        or not isinstance(boot_payload, dict)
+        or not isinstance(runtime_payload, dict)
+    ):
         raise ABError("manifest payload entries missing")
 
     regular_bytes = root_payload.get("regular_bytes")
     regular_files = root_payload.get("regular_files")
     boot_bytes = boot_payload.get("size")
+    runtime_bytes = runtime_payload.get("size")
 
     if not isinstance(regular_bytes, int) or regular_bytes <= 0:
         raise ABError("manifest rootfs regular_bytes is invalid")
@@ -686,6 +695,8 @@ def validate_capacity(manifest: dict[str, object], target: dict[str, object]) ->
         raise ABError("manifest rootfs regular_files is invalid")
     if not isinstance(boot_bytes, int) or boot_bytes <= 0:
         raise ABError("manifest boot size is invalid")
+    if not isinstance(runtime_bytes, int) or runtime_bytes <= 0:
+        raise ABError("manifest runtime size is invalid")
 
     root_capacity = int(target["root_size"])
     boot_capacity = int(target["boot_size"])
@@ -693,10 +704,11 @@ def validate_capacity(manifest: dict[str, object], target: dict[str, object]) ->
 
     # Keep deliberate headroom for filesystem metadata, directories, symlinks,
     # logs and post-boot growth.
-    if regular_bytes > int(root_capacity * 0.85):
+    if regular_bytes + runtime_bytes > int(root_capacity * 0.85):
         raise ABError(
-            f"rootfs payload regular-file bytes ({format_bytes(regular_bytes)}) "
-            f"are too large for target ({format_bytes(root_capacity)})"
+            f"rootfs+runtime payload bytes "
+            f"({format_bytes(regular_bytes + runtime_bytes)}) are too large for target "
+            f"({format_bytes(root_capacity)})"
         )
     if regular_files > int(inode_capacity * 0.85):
         raise ABError(
@@ -1118,6 +1130,48 @@ def validate_offline_slot(
                 if file_sha256(boot_dtb) != file_sha256(root_dtb):
                     raise ABError(f"slot {slot} FAT/root Pi 5 DTB mismatch")
 
+            runtime_helpers = (
+                "vyos-pi-ab-status.py",
+                "vyos-pi-ab-commit.py",
+                "vyos-pi-ab-healthcheck.py",
+                "vyos-pi-ab-auto-guard.py",
+                "install-vyos-pi-ab-update.py",
+            )
+            for helper_name in runtime_helpers:
+                helper = root / "usr/libexec/vyos" / helper_name
+                if not helper.is_file() or not os.access(helper, os.X_OK):
+                    raise ABError(
+                        f"ROOT-{slot} A/B runtime helper is missing/not executable: "
+                        f"{helper_name}"
+                    )
+
+            guard_unit = (
+                root / "etc/systemd/system/vyos-pi-ab-auto-guard.service"
+            )
+            guard_link = (
+                root
+                / "etc/systemd/system/multi-user.target.wants/"
+                "vyos-pi-ab-auto-guard.service"
+            )
+            if not guard_unit.is_file():
+                raise ABError(f"ROOT-{slot} automatic watchdog guard unit is missing")
+            if not guard_link.is_symlink():
+                raise ABError(f"ROOT-{slot} automatic watchdog guard is not enabled")
+            if os.readlink(guard_link) != "../vyos-pi-ab-auto-guard.service":
+                raise ABError(
+                    f"ROOT-{slot} automatic watchdog guard enable symlink is unexpected"
+                )
+
+            guard_text = guard_unit.read_text(encoding="utf-8", errors="replace")
+            expected_exec = (
+                "ExecStart=/usr/bin/python3 "
+                "/usr/libexec/vyos/vyos-pi-ab-auto-guard.py"
+            )
+            if expected_exec not in guard_text:
+                raise ABError(
+                    f"ROOT-{slot} automatic watchdog guard unit has unexpected ExecStart"
+                )
+
             config_boot = root / "config/config.boot"
             if not config_boot.is_file() or config_boot.stat().st_size <= 0:
                 raise ABError(f"ROOT-{slot} /config/config.boot is missing/empty")
@@ -1170,6 +1224,16 @@ def install_inactive_slot(
             gzip_inner=True,
             rootfs_metadata=True,
         )
+
+        print("==> Installing A/B runtime and automatic watchdog guard")
+        extract_nested_tar(
+            bundle,
+            "payload/ab-runtime.tar",
+            root,
+            gzip_inner=False,
+            rootfs_metadata=True,
+        )
+
         patch_target_root(root, slot, target)
 
         if copy_config:
@@ -1222,8 +1286,10 @@ def print_plan(
     assert isinstance(payload, dict)
     root_payload = payload["rootfs"]
     boot_payload = payload["boot"]
+    runtime_payload = payload["runtime"]
     assert isinstance(root_payload, dict)
     assert isinstance(boot_payload, dict)
+    assert isinstance(runtime_payload, dict)
 
     print()
     print("===== UPDATE PLAN =====")
@@ -1251,6 +1317,7 @@ def print_plan(
         f"{format_bytes(int(root_payload.get('regular_bytes', 0)))} regular-file bytes"
     )
     print(f"Boot payload  : {format_bytes(int(boot_payload['size']))}")
+    print(f"A/B runtime   : {format_bytes(int(runtime_payload['size']))}")
     print()
     print(f"Copy /config  : {'yes' if copy_config else 'no'} ({format_bytes(config_bytes)})")
     print(
@@ -1264,20 +1331,21 @@ def print_plan(
         f"{BOOT_LABELS[target_slot]} (filesystem UUIDs preserved)"
     )
     print("  2. Extract rootfs payload into inactive root slot")
-    print("  3. Extract boot payload into inactive boot slot")
+    print("  3. Install A/B runtime + automatic tryboot watchdog guard")
+    print("  4. Extract boot payload into inactive boot slot")
     print(
-        f"  4. Patch target /etc/fstab and cmdline.txt for slot {target_slot} "
+        f"  5. Patch target /etc/fstab and cmdline.txt for slot {target_slot} "
         f"(root PARTUUID={target['root_partuuid']})"
     )
-    print("  5. Copy /config if selected")
-    print("  6. Copy SSH host keys if selected")
-    print("  7. Validate inactive slot offline")
+    print("  6. Copy /config if selected")
+    print("  7. Copy SSH host keys if selected")
+    print("  8. Validate inactive slot offline, including auto-guard enablement")
     print(
-        f"  8. Keep {running_slot} as default and {target_slot} as the existing "
+        f"  9. Keep {running_slot} as default and {target_slot} as the existing "
         "one-shot tryboot target"
     )
-    print("  9. Manual test boot: reboot '0 tryboot'")
-    print(" 10. Healthcheck new slot; commit only on success")
+    print(" 10. Test boot: reboot '0 tryboot'")
+    print(" 11. Auto-guard arms watchdog, healthchecks, then commits only on success")
 
 
 def main() -> int:
@@ -1344,14 +1412,14 @@ def main() -> int:
     bundle = Path(args.bundle).expanduser()
     if "://" in args.bundle:
         raise ABError(
-            "v0.2 accepts local bundle files only; URL download will be added later"
+            "v0.3 accepts local bundle files only; URL download will be added later"
         )
     if not bundle.is_file():
         raise ABError(f"update bundle not found: {bundle}")
 
     check_unsaved_commits()
 
-    print("VyOS Raspberry Pi A/B update installer v0.2")
+    print("VyOS Raspberry Pi A/B update installer v0.3")
     print(f"Mode         : {'INSTALL inactive slot' if args.install else 'DRY RUN (read-only)'}")
     print(f"Bundle       : {bundle}")
     print()
@@ -1436,7 +1504,7 @@ def main() -> int:
         print()
         print("DRY RUN OK: no partitions or boot-control files were modified.")
         print(
-            "NOTE: v0.2 verifies SHA-256 integrity but does not yet provide a "
+            "NOTE: v0.3 verifies SHA-256 integrity but does not yet provide a "
             "cryptographic publisher signature."
         )
         return 0
@@ -1522,11 +1590,11 @@ def main() -> int:
     print("  sudo reboot '0 tryboot'")
     print()
     print(
-        "After the test slot boots, run the A/B healthcheck and commit it only "
-        "if healthy."
+        "After the test slot boots, the installed automatic guard will arm the "
+        "hardware watchdog, run the healthcheck, and commit only if healthy."
     )
     print(
-        "NOTE: v0.2 verifies SHA-256 integrity but does not yet provide a "
+        "NOTE: v0.3 verifies SHA-256 integrity but does not yet provide a "
         "cryptographic publisher signature."
     )
     return 0
