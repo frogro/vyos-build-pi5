@@ -2,6 +2,11 @@ name: Build VyOS Pi5 RootFS (Rolling ARM64)
 
 on:
   workflow_dispatch:
+    inputs:
+      vyos_ref:
+        description: "Exact vyos/vyos-build git ref or commit"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -16,10 +21,11 @@ jobs:
         with:
           path: repo
 
-      - name: Checkout vyos-build (current rolling)
+      - name: Checkout vyos-build (requested ref)
         uses: actions/checkout@v4
         with:
           repository: vyos/vyos-build
+          ref: ${{ inputs.vyos_ref }}
           path: vyos-build
 
       - name: Set up Docker Buildx
