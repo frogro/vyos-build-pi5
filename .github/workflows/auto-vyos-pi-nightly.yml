@@ -1,0 +1,465 @@
+name: Auto VyOS Raspberry Pi Nightly
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      vyos_version:
+        description: "Optional VyOS version override; empty = latest official rolling"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "Build even if Raspberry Pi release already exists"
+        required: false
+        default: false
+        type: boolean
+      publish:
+        description: "Publish result as GitHub pre-release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: auto-vyos-pi-nightly
+  cancel-in-progress: false
+
+jobs:
+  auto-nightly:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Raspberry Pi repository
+        uses: actions/checkout@v6
+        with:
+          ref: rolling
+          fetch-depth: 0
+
+      - name: Install verification tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            7zip \
+            7zip-standalone \
+            squashfs-tools \
+            minisign \
+            jq \
+            xz-utils
+
+      - name: Discover and verify official VyOS rolling release
+        id: upstream
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.vyos_version }}
+          FORCE_BUILD: ${{ inputs.force }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          POINTER_ISO=""
+
+          if [ -n "${REQUESTED_VERSION:-}" ]; then
+            VERSION="$REQUESTED_VERSION"
+          else
+            curl --fail --location --retry 5 \
+              https://raw.githubusercontent.com/vyos/vyos-nightly-build/rolling/version.json \
+              -o upstream-pointer.json
+
+            VERSION="$(jq -r '.[0].version' upstream-pointer.json)"
+            POINTER_ISO="$(jq -r '.[0].url' upstream-pointer.json)"
+          fi
+
+          [[ "$VERSION" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{4}-rolling$ ]]
+
+          curl --fail --location --retry 5 \
+            "https://api.github.com/repos/vyos/vyos-nightly-build/releases/tags/$VERSION" \
+            -o upstream-release.json
+
+          ISO_URL="$(
+            jq -r '
+              .assets[]
+              | select(.name | endswith("-generic-amd64.iso"))
+              | .browser_download_url
+            ' upstream-release.json | head -n1
+          )"
+
+          SIG_URL="$(
+            jq -r '
+              .assets[]
+              | select(.name | endswith("-generic-amd64.iso.minisig"))
+              | .browser_download_url
+            ' upstream-release.json | head -n1
+          )"
+
+          test -n "$ISO_URL"
+          test "$ISO_URL" != "null"
+          test -n "$SIG_URL"
+          test "$SIG_URL" != "null"
+
+          if [ -n "$POINTER_ISO" ]; then
+            test "$POINTER_ISO" = "$ISO_URL"
+          fi
+
+          TAG="v${VERSION}-rpi"
+
+          if gh release view "$TAG" \
+               --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+             && [ "${FORCE_BUILD:-false}" != "true" ]; then
+            echo "Raspberry Pi release $TAG already exists; nothing to do."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          curl --fail --location --retry 5 "$ISO_URL" -o upstream.iso
+          curl --fail --location --retry 5 "$SIG_URL" -o upstream.iso.minisig
+          curl --fail --location --retry 5 \
+            https://raw.githubusercontent.com/vyos/vyos-nightly-build/rolling/minisign.pub \
+            -o minisign.pub
+
+          minisign -Vm upstream.iso -p minisign.pub
+
+          mkdir -p upstream-iso
+          7zz x upstream.iso \
+            -oupstream-iso \
+            live/filesystem.squashfs \
+            -y
+
+          FS=upstream-iso/live/filesystem.squashfs
+          test -f "$FS"
+
+          unsquashfs -cat "$FS" \
+            usr/share/vyos/version.json \
+            > upstream-vyos-version.json
+
+          jq -e --arg v "$VERSION" '
+            .version == $v
+            and .architecture == "amd64"
+            and (.build_git | length > 0)
+          ' upstream-vyos-version.json
+
+          BUILD_GIT="$(jq -r '.build_git' upstream-vyos-version.json)"
+
+          [[ "$BUILD_GIT" =~ ^[0-9a-f]{7,40}$ ]]
+
+          curl --fail --location --retry 5 \
+            "https://api.github.com/repos/vyos/vyos-build/commits/$BUILD_GIT" \
+            -o vyos-build-commit.json
+
+          VYOS_REF="$(jq -r '.sha' vyos-build-commit.json)"
+
+          [[ "$VYOS_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VYOS_REF" == "$BUILD_GIT"* ]]
+
+          mkdir -p official-dpkg/updates
+
+          unsquashfs -cat "$FS" \
+            var/lib/dpkg/status \
+            > official-dpkg/status
+
+          FRR_VERSION="$(
+            dpkg-query \
+              --admindir="$PWD/official-dpkg" \
+              -W -f='${Version}' frr
+          )"
+
+          PODMAN_VERSION="$(
+            dpkg-query \
+              --admindir="$PWD/official-dpkg" \
+              -W -f='${Version}' podman
+          )"
+
+          VYOS1X_VERSION="$(
+            dpkg-query \
+              --admindir="$PWD/official-dpkg" \
+              -W -f='${Version}' vyos-1x
+          )"
+
+          echo "Official VyOS version: $VERSION"
+          echo "Official build_git:    $BUILD_GIT"
+          echo "Resolved full commit:  $VYOS_REF"
+          echo "FRR:                   $FRR_VERSION"
+          echo "Podman:                $PODMAN_VERSION"
+          echo "vyos-1x:               $VYOS1X_VERSION"
+          echo "Official ISO signature verification: PASS"
+
+          {
+            echo "should_build=true"
+            echo "version=$VERSION"
+            echo "vyos_ref=$VYOS_REF"
+            echo "build_git=$BUILD_GIT"
+            echo "frr_version=$FRR_VERSION"
+            echo "podman_version=$PODMAN_VERSION"
+            echo "vyos1x_version=$VYOS1X_VERSION"
+            echo "upstream_release_url=https://github.com/vyos/vyos-nightly-build/releases/tag/$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch pinned Raspberry Pi build
+        id: build
+        if: steps.upstream.outputs.should_build == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+          VYOS_REF: ${{ steps.upstream.outputs.vyos_ref }}
+          FRR_VERSION: ${{ steps.upstream.outputs.frr_version }}
+          PODMAN_VERSION: ${{ steps.upstream.outputs.podman_version }}
+          VYOS1X_VERSION: ${{ steps.upstream.outputs.vyos1x_version }}
+        run: |
+          set -euo pipefail
+
+          BEFORE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          TITLE="RPi $VERSION @ $VYOS_REF"
+
+          gh workflow run build-vyos-pi5.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref rolling \
+            -f vyos_ref="$VYOS_REF" \
+            -f vyos_version="$VERSION" \
+            -f expected_frr_version="$FRR_VERSION" \
+            -f expected_podman_version="$PODMAN_VERSION" \
+            -f expected_vyos1x_version="$VYOS1X_VERSION"
+
+          RUN_ID=""
+
+          for _ in $(seq 1 60); do
+            RUN_ID="$(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow build-vyos-pi5.yml \
+                --branch rolling \
+                --event workflow_dispatch \
+                --limit 20 \
+                --json databaseId,displayTitle,createdAt |
+              jq -r \
+                --arg title "$TITLE" \
+                --arg before "$BEFORE" \
+                '.[] |
+                 select(.displayTitle == $title and .createdAt >= $before) |
+                 .databaseId' |
+              head -n1
+            )"
+
+            [ -n "$RUN_ID" ] && break
+            sleep 5
+          done
+
+          test -n "$RUN_ID"
+
+          echo "Child build run: $RUN_ID"
+
+          gh run watch "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
+
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+          mkdir -p artifact
+
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name vyos-pi5-image \
+            --dir artifact
+
+      - name: Validate generated Raspberry Pi artifact
+        if: steps.upstream.outputs.should_build == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.upstream.outputs.version }}
+          VYOS_REF: ${{ steps.upstream.outputs.vyos_ref }}
+          FRR_VERSION: ${{ steps.upstream.outputs.frr_version }}
+          PODMAN_VERSION: ${{ steps.upstream.outputs.podman_version }}
+          VYOS1X_VERSION: ${{ steps.upstream.outputs.vyos1x_version }}
+        run: |
+          set -euo pipefail
+
+          cd artifact
+
+          sha256sum -c SHA256SUMS
+
+          IMAGE="vyos-${VERSION}-rpi-arm64.img.xz"
+
+          test -f "$IMAGE"
+          xz -t "$IMAGE"
+
+          jq -e \
+            --arg version "$VERSION" \
+            --arg ref "$VYOS_REF" \
+            --arg frr "$FRR_VERSION" \
+            --arg podman "$PODMAN_VERSION" \
+            --arg vyos1x "$VYOS1X_VERSION" '
+              .version == $version
+              and .architecture == "arm64"
+              and .build_type == "release"
+              and .vyos_build_commit == $ref
+              and .frr_version == $frr
+              and .podman_version == $podman
+              and .vyos_1x_version == $vyos1x
+            ' manifest.json
+
+          echo "Complete automated Raspberry Pi artifact QA: PASS"
+
+      - name: Publish automated Raspberry Pi pre-release
+        if: ${{ steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+          VYOS_REF: ${{ steps.upstream.outputs.vyos_ref }}
+          FRR_VERSION: ${{ steps.upstream.outputs.frr_version }}
+          PODMAN_VERSION: ${{ steps.upstream.outputs.podman_version }}
+          VYOS1X_VERSION: ${{ steps.upstream.outputs.vyos1x_version }}
+          UPSTREAM_URL: ${{ steps.upstream.outputs.upstream_release_url }}
+        run: |
+          set -euo pipefail
+
+          TAG="v${VERSION}-rpi"
+
+          if gh release view "$TAG" \
+               --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to overwrite it."
+            exit 1
+          fi
+
+          KERNEL="$(jq -r '.kernel' artifact/manifest.json)"
+          BASE_TAG="$(jq -r '.hardware_base_tag' artifact/manifest.json)"
+          RPI_COMMIT="$(jq -r '.rpi_build_repo_commit' artifact/manifest.json)"
+
+          cat > RELEASE-NOTES.md <<EOF
+          # VyOS ${VERSION} for Raspberry Pi 4 / 5
+
+          Unofficial automated ARM64 community build of VyOS Rolling for Raspberry Pi.
+
+          ## VyOS base
+
+          - Official VyOS Rolling release: \`${VERSION}\`
+          - Exact \`vyos/vyos-build\` commit: \`${VYOS_REF}\`
+          - Architecture: \`arm64\`
+          - Build type: \`release\`
+          - Upstream release: ${UPSTREAM_URL}
+
+          ## Userspace parity checks
+
+          Versions were compared against the signed official AMD64 VyOS ISO:
+
+          - FRR: \`${FRR_VERSION}\`
+          - Podman: \`${PODMAN_VERSION}\`
+          - vyos-1x: \`${VYOS1X_VERSION}\`
+
+          ## Raspberry Pi hardware base
+
+          - Hardware base: \`${BASE_TAG}\`
+          - Kernel: \`${KERNEL}\`
+
+          The Raspberry Pi kernel, firmware, Device Trees and boot environment are board-specific.
+          The VyOS userspace is built from the exact source commit identified by the official Rolling ISO.
+
+          ## Automated QA
+
+          This release passed:
+
+          - official VyOS ISO Minisign verification
+          - official version/source-commit extraction
+          - ARM64 release-version validation
+          - FRR/Podman/vyos-1x version parity checks
+          - pinned Raspberry Pi hardware-base SHA256 validation
+          - Raspberry Pi DTB/module/firmware validation
+          - final image SHA256 verification
+          - XZ integrity validation
+
+          This automatically generated build is published as a **pre-release** because each new Nightly cannot be boot-tested on physical Raspberry Pi hardware by GitHub Actions.
+
+          Full-image flashing remains the supported installation/update method. The experimental A/B update bundle is not included yet.
+
+          ## Disclaimer
+
+          This is an unofficial community build and is not an official VyOS image.
+          EOF
+
+          sed -i 's/^          //' RELEASE-NOTES.md
+
+          gh release create "$TAG" \
+            artifact/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$RPI_COMMIT" \
+            --title "VyOS ${VERSION} for Raspberry Pi 4 / 5" \
+            --notes-file RELEASE-NOTES.md \
+            --prerelease
+
+      - name: Update project changelog
+        if: ${{ steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
+        shell: bash
+        env:
+          VERSION: ${{ steps.upstream.outputs.version }}
+          VYOS_REF: ${{ steps.upstream.outputs.vyos_ref }}
+          FRR_VERSION: ${{ steps.upstream.outputs.frr_version }}
+          PODMAN_VERSION: ${{ steps.upstream.outputs.podman_version }}
+          VYOS1X_VERSION: ${{ steps.upstream.outputs.vyos1x_version }}
+        run: |
+          set -euo pipefail
+
+          git pull --rebase origin rolling
+
+          KERNEL="$(jq -r '.kernel' artifact/manifest.json)"
+          BASE_TAG="$(jq -r '.hardware_base_tag' artifact/manifest.json)"
+
+          export KERNEL BASE_TAG
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          ref = os.environ["VYOS_REF"]
+          frr = os.environ["FRR_VERSION"]
+          podman = os.environ["PODMAN_VERSION"]
+          vyos1x = os.environ["VYOS1X_VERSION"]
+          kernel = os.environ["KERNEL"]
+          base = os.environ["BASE_TAG"]
+
+          heading = f"## v{version}-rpi"
+
+          p = Path("CHANGELOG.md")
+          text = p.read_text()
+
+          if heading in text:
+              raise SystemExit(0)
+
+          entry = f"""
+          {heading}
+
+          - Automated Raspberry Pi build synchronized to official VyOS `{version}`.
+          - Exact `vyos/vyos-build` commit: `{ref}`.
+          - Verified userspace parity: FRR `{frr}`, Podman `{podman}`, vyos-1x `{vyos1x}`.
+          - Raspberry Pi hardware base: `{base}`.
+          - Kernel: `{kernel}`.
+          - Published automatically as a GitHub pre-release after static build and image QA.
+          - Full-image flashing remains the supported update method; A/B update bundles remain experimental.
+
+          """
+
+          lines = text.splitlines(keepends=True)
+          pos = 1 if lines and lines[0].startswith("# ") else 0
+          lines[pos:pos] = ["\n", entry.lstrip()]
+          p.write_text("".join(lines))
+          PY
+
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "Changelog already current."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add CHANGELOG.md
+          git diff --cached --check
+          git commit -m "Document automated VyOS ${VERSION} Raspberry Pi build"
+
+          git push origin HEAD:rolling
