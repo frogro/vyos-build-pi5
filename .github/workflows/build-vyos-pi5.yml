@@ -62,6 +62,7 @@ jobs:
             parted \
             e2fsprogs \
             dosfstools \
+            zstd \
             curl \
             jq \
             python3
@@ -171,10 +172,12 @@ jobs:
 
           sudo chown "$(id -u):$(id -g)" vyos-rootfs-fresh.tar.gz
 
+          ROOTFS_SHA="$(sha256sum vyos-rootfs-fresh.tar.gz | awk '{print $1}')"
           echo "vyos_commit=$VYOS_COMMIT" >> "$GITHUB_OUTPUT"
           echo "iso_name=$ISO_NAME" >> "$GITHUB_OUTPUT"
+          echo "rootfs_sha=$ROOTFS_SHA" >> "$GITHUB_OUTPUT"
 
-          sha256sum vyos-rootfs-fresh.tar.gz
+          echo "$ROOTFS_SHA  vyos-rootfs-fresh.tar.gz"
 
       - name: Free build space
         run: |
@@ -254,7 +257,7 @@ jobs:
           echo "MERGED_ROOTFS=$MERGE_DIR/vyos-rootfs-pi5-merged.tar.gz" >> "$GITHUB_ENV"
           echo "PI5_BASE_MANIFEST=$MERGE_DIR/pi5-base-manifest.txt" >> "$GITHUB_ENV"
 
-      - name: Build flashable Raspberry Pi VyOS image
+      - name: Build flashable Raspberry Pi VyOS A/B image
         shell: bash
         run: |
           set -euo pipefail
@@ -267,7 +270,7 @@ jobs:
 
           sudo env \
             TMPDIR="$TMP_WORK" \
-            IMAGE_SIZE_GIB=6 \
+            AB_IMAGE_SIZE_MIB=12360 \
             repo/scripts/pi5/build-vyos-pi5-image.sh \
             "$ARMBIAN_BASE_FILE" \
             "$MERGED_ROOTFS" \
@@ -278,27 +281,70 @@ jobs:
           test -f "$OUT_IMG"
           ls -lh "$OUT_IMG"
 
-      - name: Compress image and create release metadata
+      - name: Compress Raspberry Pi A/B image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT_IMG="$GITHUB_WORKSPACE/output/vyos-${{ inputs.vyos_version }}-rpi-arm64.img"
+          test -f "$OUT_IMG"
+
+          xz -T0 -6 "$OUT_IMG"
+          xz -t "$OUT_IMG.xz"
+          ls -lh "$OUT_IMG.xz"
+
+      - name: Build matching Raspberry Pi A/B update bundle
         shell: bash
         run: |
           set -euo pipefail
 
           OUT_DIR="$GITHUB_WORKSPACE/output"
-          OUT_IMG="$OUT_DIR/vyos-${{ inputs.vyos_version }}-rpi-arm64.img"
+          TMP_WORK="$RUNNER_TEMP/pi5-tmp"
+          UPDATE_BUNDLE="$OUT_DIR/vyos-${{ inputs.vyos_version }}-rpi-arm64-update.tar.zst"
 
-          xz -T0 -6 "$OUT_IMG"
-          xz -t "$OUT_IMG.xz"
+          sudo env \
+            TMPDIR="$TMP_WORK" \
+            ZSTD_LEVEL=10 \
+            repo/scripts/pi5/build-vyos-pi-ab-update.sh \
+            "$ARMBIAN_BASE_FILE" \
+            "$MERGED_ROOTFS" \
+            "$UPDATE_BUNDLE"
 
+          sudo chown "$(id -u):$(id -g)" "$UPDATE_BUNDLE"
+          test -f "$UPDATE_BUNDLE"
+          zstd -q -t "$UPDATE_BUNDLE"
+          ls -lh "$UPDATE_BUNDLE"
+
+          # The large build inputs are no longer needed after both release
+          # artifacts have been produced.
+          sudo rm -f "$GITHUB_WORKSPACE/vyos-rootfs-fresh.tar.gz"
+          sudo rm -f "$MERGED_ROOTFS"
+          sudo rm -f "$ARMBIAN_BASE_FILE"
+          df -h /
+
+      - name: Create Raspberry Pi A/B release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT_DIR="$GITHUB_WORKSPACE/output"
           cd "$OUT_DIR"
 
-          sha256sum vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz > SHA256SUMS
+          IMAGE="vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz"
+          UPDATE_BUNDLE="vyos-${{ inputs.vyos_version }}-rpi-arm64-update.tar.zst"
 
-          ROOTFS_SHA="$(sha256sum "$GITHUB_WORKSPACE/vyos-rootfs-fresh.tar.gz" | awk '{print $1}')"
-          IMAGE_SHA="$(awk '{print $1}' SHA256SUMS)"
+          sha256sum "$IMAGE" "$UPDATE_BUNDLE" > SHA256SUMS
+
+          ROOTFS_SHA="${{ steps.rootfs.outputs.rootfs_sha }}"
+          IMAGE_SHA="$(awk '$2 ~ /\.img\.xz$/ {print $1}' SHA256SUMS)"
+          UPDATE_SHA="$(awk '$2 ~ /-update\.tar\.zst$/ {print $1}' SHA256SUMS)"
           REPO_COMMIT="$(git -C "$GITHUB_WORKSPACE/repo" rev-parse HEAD)"
 
+          test -n "$IMAGE_SHA"
+          test -n "$UPDATE_SHA"
+
           {
-            echo "VyOS Raspberry Pi 4 / Raspberry Pi 5 image build"
+            echo "VyOS Raspberry Pi 4 / Raspberry Pi 5 A/B image build"
             echo
             echo "Raspberry Pi build repository commit:"
             echo "$REPO_COMMIT"
@@ -327,11 +373,20 @@ jobs:
             echo "Configured Armbian kernel:"
             echo "${{ steps.base.outputs.kernel }}"
             echo
+            echo "Image layout:"
+            echo "Raspberry Pi A/B: VYOS_AB + VYOS_BOOT_A/B + VYOS_ROOT_A/B"
+            echo
             echo "Final image:"
-            echo "vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz"
+            echo "$IMAGE"
             echo
             echo "Final image SHA256:"
             echo "$IMAGE_SHA"
+            echo
+            echo "A/B update bundle:"
+            echo "$UPDATE_BUNDLE"
+            echo
+            echo "A/B update bundle SHA256:"
+            echo "$UPDATE_SHA"
           } > BUILD-INFO.txt
 
           jq -n \
@@ -344,8 +399,10 @@ jobs:
             --arg base_tag "${{ steps.base.outputs.tag }}" \
             --arg base_sha "${{ steps.base.outputs.sha256 }}" \
             --arg kernel "${{ steps.base.outputs.kernel }}" \
-            --arg image "vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz" \
+            --arg image "$IMAGE" \
             --arg image_sha "$IMAGE_SHA" \
+            --arg update_bundle "$UPDATE_BUNDLE" \
+            --arg update_sha "$UPDATE_SHA" \
             '{
               version: $version,
               architecture: "arm64",
@@ -358,8 +415,11 @@ jobs:
               hardware_base_tag: $base_tag,
               hardware_base_sha256: $base_sha,
               kernel: $kernel,
+              image_layout: "raspberry-pi-ab",
               image: $image,
-              image_sha256: $image_sha
+              image_sha256: $image_sha,
+              update_bundle: $update_bundle,
+              update_bundle_sha256: $update_sha
             }' > manifest.json
 
           cp "$PI5_BASE_MANIFEST" ./pi5-base-manifest.txt
@@ -372,7 +432,8 @@ jobs:
           echo
           echo "===== OUTPUT ====="
           ls -lh \
-            vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz \
+            "$IMAGE" \
+            "$UPDATE_BUNDLE" \
             SHA256SUMS \
             BUILD-INFO.txt \
             manifest.json \
@@ -384,9 +445,11 @@ jobs:
           name: vyos-pi5-image
           path: |
             output/vyos-${{ inputs.vyos_version }}-rpi-arm64.img.xz
+            output/vyos-${{ inputs.vyos_version }}-rpi-arm64-update.tar.zst
             output/SHA256SUMS
             output/BUILD-INFO.txt
             output/manifest.json
             output/pi5-base-manifest.txt
-          retention-days: 30
+          retention-days: 7
+          compression-level: 0
           if-no-files-found: error

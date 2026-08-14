@@ -22,7 +22,7 @@ set -Eeuo pipefail
 #     vyos-2026.08.13-0024-rolling-rpi-arm64.img.xz
 #
 # Optional:
-#   --repo DIR        vyos-build-pi5 A/B worktree containing scripts/pi5/
+#   --repo DIR        vyos-build-pi5 checkout containing scripts/pi5/
 #   --output-dir DIR  output directory (default: source image directory)
 #   --force           overwrite existing output artifacts
 #   --keep-work       keep temporary work directory for debugging
@@ -42,7 +42,8 @@ AB_IMAGE_SIZE_MIB="${AB_IMAGE_SIZE_MIB:-12360}"
 XZ_LEVEL="${XZ_LEVEL:-6}"
 ZSTD_LEVEL="${ZSTD_LEVEL:-10}"
 GZIP_LEVEL="${GZIP_LEVEL:-6}"
-DEFAULT_REPO="/mnt/datenplatte/pi5vyos/vyos-build-pi5-ab"
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_REPO="$(cd "${SELF_DIR}/../.." && pwd)"
 REPO="${VYOS_PI5_AB_REPO:-$DEFAULT_REPO}"
 OUT_DIR=""
 FORCE=0
@@ -69,7 +70,7 @@ Usage:
   sudo ./convert-vyos-rpi-image-to-ab.sh [options] SOURCE.img.xz
 
 Options:
-  --repo DIR        A/B repository/worktree (default: /mnt/datenplatte/pi5vyos/vyos-build-pi5-ab)
+  --repo DIR        repository/worktree (default: checkout containing this script)
   --output-dir DIR  write outputs here (default: directory containing SOURCE)
   --force           overwrite existing output files
   --keep-work       keep temporary work directory for debugging
@@ -338,7 +339,7 @@ create_runtime_payload() {
     local systemd_dir="${RUNTIME_ROOT}/etc/systemd/system"
     local wants_dir="${systemd_dir}/multi-user.target.wants"
 
-    info "Creating A/B runtime payload from the current feature worktree"
+    info "Creating A/B runtime payload from the current repository checkout"
     mkdir -p "$libexec" "$op_mode" "$wants_dir"
 
     for script in \

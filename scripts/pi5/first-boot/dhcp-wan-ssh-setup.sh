@@ -94,23 +94,27 @@ set interfaces ethernet "$WIRED_IF" address 'dhcp'
 set interfaces ethernet "$WIRED_IF" dhcp-options default-route-distance "$ROUTE_DISTANCE"
 set service ssh
 
-CHANGES="$(compare 2>/dev/null || true)"
+COMMIT_LOG="$(mktemp /tmp/dhcp-wan-commit.XXXXXX)" ||
+    fail "Could not create temporary commit log"
 
-if [ -n "$CHANGES" ]; then
-    if ! commit; then
-        discard
-        fail "commit failed"
-    fi
+if commit 2>&1 | tee "$COMMIT_LOG"; then
+    rm -f "$COMMIT_LOG"
 
     if ! save; then
-        discard
+        discard 2>/dev/null || true
         fail "save failed"
     fi
 
     log "VyOS configuration saved"
-else
+elif grep -qF "No configuration changes to commit" "$COMMIT_LOG"; then
+    rm -f "$COMMIT_LOG"
     discard 2>/dev/null || true
     log "The requested VyOS configuration was already present"
+else
+    COMMIT_ERROR="$(cat "$COMMIT_LOG")"
+    rm -f "$COMMIT_LOG"
+    discard 2>/dev/null || true
+    fail "commit failed: $COMMIT_ERROR"
 fi
 
 log "Konfigurationsphase abgeschlossen"

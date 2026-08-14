@@ -51,7 +51,8 @@ jobs:
             squashfs-tools \
             minisign \
             jq \
-            xz-utils
+            xz-utils \
+            zstd
 
       - name: Discover and verify official VyOS rolling release
         id: upstream
@@ -291,16 +292,24 @@ jobs:
           sha256sum -c SHA256SUMS
 
           IMAGE="vyos-${VERSION}-rpi-arm64.img.xz"
+          UPDATE="vyos-${VERSION}-rpi-arm64-update.tar.zst"
+          UPDATE_MANIFEST="$RUNNER_TEMP/rpi-ab-update-manifest.json"
 
           test -f "$IMAGE"
+          test -f "$UPDATE"
           xz -t "$IMAGE"
+          zstd -q -t "$UPDATE"
+
+          zstd -q -dc "$UPDATE" | tar -xOf - manifest.json > "$UPDATE_MANIFEST"
 
           jq -e \
             --arg version "$VERSION" \
             --arg ref "$VYOS_REF" \
             --arg frr "$FRR_VERSION" \
             --arg podman "$PODMAN_VERSION" \
-            --arg vyos1x "$VYOS1X_VERSION" '
+            --arg vyos1x "$VYOS1X_VERSION" \
+            --arg image "$IMAGE" \
+            --arg update "$UPDATE" '
               .version == $version
               and .architecture == "arm64"
               and .build_type == "release"
@@ -308,12 +317,33 @@ jobs:
               and .frr_version == $frr
               and .podman_version == $podman
               and .vyos_1x_version == $vyos1x
+              and .image_layout == "raspberry-pi-ab"
+              and .image == $image
+              and .update_bundle == $update
             ' manifest.json
 
-          echo "Complete automated Raspberry Pi artifact QA: PASS"
+          jq -e \
+            --arg version "$VERSION" '
+              .format == "vyos-rpi-ab-update"
+              and .format_version == 2
+              and .platform == "raspberry-pi"
+              and .architecture == "arm64"
+              and .version == $version
+              and .required_layout.control_label == "VYOS_AB"
+              and .required_layout.boot_labels.A == "VYOS_BOOT_A"
+              and .required_layout.boot_labels.B == "VYOS_BOOT_B"
+              and .required_layout.root_labels.A == "VYOS_ROOT_A"
+              and .required_layout.root_labels.B == "VYOS_ROOT_B"
+              and .required_layout.boot_partitions.A == 2
+              and .required_layout.boot_partitions.B == 3
+              and .required_layout.root_partitions.A == 5
+              and .required_layout.root_partitions.B == 6
+            ' "$UPDATE_MANIFEST"
+
+          echo "Complete automated Raspberry Pi A/B artifact QA: PASS"
 
       - name: Publish automated Raspberry Pi release
-        if: ${{ steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
+        if: ${{ github.ref == 'refs/heads/rolling' && steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -340,84 +370,19 @@ jobs:
           BASE_TAG="$(jq -r '.hardware_base_tag' artifact/manifest.json)"
           RPI_COMMIT="$(jq -r '.rpi_build_repo_commit' artifact/manifest.json)"
 
-          cat <<EOF | sed 's/^          //' > RELEASE-NOTES.md
-          # VyOS ${VERSION} for Raspberry Pi 4 / 5
-
-          Unofficial Raspberry Pi ARM64 build based directly on the corresponding official VyOS Rolling Nightly.
-
-          ## Official VyOS Rolling release
-
-          - Release: \`${UPSTREAM_NAME}\`
-          - Version: \`${VERSION}\`
-          - Published: \`${UPSTREAM_PUBLISHED}\`
-          - Official release: ${UPSTREAM_URL}
-          - Exact \`vyos/vyos-build\` commit: \`${VYOS_REF}\`
-
-          The VyOS userspace in this Raspberry Pi image is built from the exact source snapshot identified by this official Rolling release.
-
-          ## Official VyOS release notes
-
-          EOF
-
-          if [ -s upstream-release-body.md ]; then
-            cat upstream-release-body.md >> RELEASE-NOTES.md
-          else
-            echo "No upstream release notes were supplied for this Nightly." >> RELEASE-NOTES.md
-          fi
-
-          cat <<EOF | sed 's/^          //' >> RELEASE-NOTES.md
-
-          ## Verified userspace parity
-
-          Compared against the signed official VyOS AMD64 ISO:
-
-          - FRR: \`${FRR_VERSION}\`
-          - Podman: \`${PODMAN_VERSION}\`
-          - vyos-1x: \`${VYOS1X_VERSION}\`
-
-          ## Raspberry Pi adaptation
-
-          - Architecture: \`arm64\`
-          - Build type: \`release\`
-          - Raspberry Pi hardware base: \`${BASE_TAG}\`
-          - Kernel: \`${KERNEL}\`
-
-          The Raspberry Pi-specific kernel, boot environment, Device Trees, kernel modules and firmware are supplied by the pinned Raspberry Pi hardware base.
-
-          ## Automated validation
-
-          This build passed:
-
-          - official VyOS ISO Minisign verification
-          - official VyOS version validation
-          - exact upstream source-commit resolution
-          - ARM64 release metadata validation
-          - FRR package-version parity
-          - Podman package-version parity
-          - vyos-1x package-version parity
-          - pinned Raspberry Pi hardware-base SHA256 validation
-          - Raspberry Pi kernel/module/DTB/firmware validation
-          - final image SHA256 verification
-          - XZ integrity validation
-
-          ## Hardware validation status
-
-          Automatically generated Raspberry Pi builds are published after passing the automated validation checks. GitHub Actions cannot physically boot-test every generated image.
-
-          The Raspberry Pi-specific hardware stack used by these builds — including the kernel, boot configuration, Device Trees, firmware and drivers — has been validated on physical Raspberry Pi 5 hardware.
-
-          ## Installation and upgrades
-
-          Use the supplied \`.img.xz\` image for installation.
-
-          Full-image flashing remains the supported update method.
-
-          The planned Raspberry Pi A/B update mechanism and \`update.tar.zst\` bundle are not included until boot, rollback and recovery have been hardware-tested.
-
-          ## Disclaimer
-
-          This is an unofficial community Raspberry Pi build and is not an official VyOS image.
-          EOF
+          python3 scripts/pi5/render-release-notes.py \
+            --version "$VERSION" \
+            --upstream-name "$UPSTREAM_NAME" \
+            --upstream-published "$UPSTREAM_PUBLISHED" \
+            --upstream-url "$UPSTREAM_URL" \
+            --vyos-ref "$VYOS_REF" \
+            --frr-version "$FRR_VERSION" \
+            --podman-version "$PODMAN_VERSION" \
+            --vyos1x-version "$VYOS1X_VERSION" \
+            --kernel "$KERNEL" \
+            --base-tag "$BASE_TAG" \
+            --upstream-notes-file upstream-release-body.md \
+            --output RELEASE-NOTES.md
 
           gh release create "$TAG" \
             artifact/* \
@@ -427,8 +392,8 @@ jobs:
             --notes-file RELEASE-NOTES.md \
             --latest
 
-      - name: Update project changelog
-        if: ${{ steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
+      - name: Update project changelog and latest A/B metadata
+        if: ${{ github.ref == 'refs/heads/rolling' && steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
         shell: bash
         env:
           VERSION: ${{ steps.upstream.outputs.version }}
@@ -437,6 +402,7 @@ jobs:
           PODMAN_VERSION: ${{ steps.upstream.outputs.podman_version }}
           VYOS1X_VERSION: ${{ steps.upstream.outputs.vyos1x_version }}
           UPSTREAM_URL: ${{ steps.upstream.outputs.upstream_release_url }}
+          UPSTREAM_PUBLISHED: ${{ steps.upstream.outputs.upstream_published }}
         run: |
           set -euo pipefail
 
@@ -445,60 +411,33 @@ jobs:
           KERNEL="$(jq -r '.kernel' artifact/manifest.json)"
           BASE_TAG="$(jq -r '.hardware_base_tag' artifact/manifest.json)"
 
-          export KERNEL BASE_TAG
+          python3 scripts/pi5/update-changelog.py \
+            --file CHANGELOG.md \
+            --version "$VERSION" \
+            --upstream-url "$UPSTREAM_URL" \
+            --vyos-ref "$VYOS_REF" \
+            --frr-version "$FRR_VERSION" \
+            --podman-version "$PODMAN_VERSION" \
+            --vyos1x-version "$VYOS1X_VERSION" \
+            --kernel "$KERNEL" \
+            --base-tag "$BASE_TAG"
 
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
+          python3 scripts/pi5/write-version-json.py \
+            --version "$VERSION" \
+            --timestamp "$UPSTREAM_PUBLISHED" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output version.json
 
-          version = os.environ["VERSION"]
-          ref = os.environ["VYOS_REF"]
-          frr = os.environ["FRR_VERSION"]
-          podman = os.environ["PODMAN_VERSION"]
-          vyos1x = os.environ["VYOS1X_VERSION"]
-          upstream_url = os.environ["UPSTREAM_URL"]
-          kernel = os.environ["KERNEL"]
-          base = os.environ["BASE_TAG"]
-
-          heading = f"## v{version}-rpi"
-
-          p = Path("CHANGELOG.md")
-          text = p.read_text()
-
-          if heading in text:
-              raise SystemExit(0)
-
-          entry = f"""
-          {heading}
-
-          - Synchronized to official VyOS Rolling `{version}`.
-          - Official upstream release: {upstream_url}
-          - Exact `vyos/vyos-build` commit: `{ref}`.
-          - Verified userspace parity: FRR `{frr}`, Podman `{podman}`, vyos-1x `{vyos1x}`.
-          - Raspberry Pi hardware base remains `{base}`.
-          - Raspberry Pi kernel remains `{kernel}`.
-          - Published automatically as the latest GitHub release after static build and image QA.
-          - See the linked official VyOS release for the upstream VyOS changes contained in this build.
-          - Full-image flashing remains supported; A/B update bundles remain experimental.
-
-          """
-
-          lines = text.splitlines(keepends=True)
-          pos = 1 if lines and lines[0].startswith("# ") else 0
-          lines[pos:pos] = ["\n", entry.lstrip()]
-          p.write_text("".join(lines))
-          PY
-
-          if git diff --quiet -- CHANGELOG.md; then
-            echo "Changelog already current."
+          if git diff --quiet -- CHANGELOG.md version.json; then
+            echo "Changelog and version.json already current."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add CHANGELOG.md
+          git add CHANGELOG.md version.json
           git diff --cached --check
-          git commit -m "Document automated VyOS ${VERSION} Raspberry Pi build"
+          git commit -m "Document automated VyOS ${VERSION} Raspberry Pi A/B build"
 
           git push origin HEAD:rolling

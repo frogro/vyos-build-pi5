@@ -9,6 +9,9 @@ service {
 }
 system {
     host-name "vyos"
+    update-check {
+        url "https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"
+    }
     login {
         user vyos {
             authentication {

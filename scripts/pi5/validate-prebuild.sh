@@ -7,6 +7,8 @@ P="$ROOT/scripts/pi5"
 for f in \
     "$P/inject-defaults.sh" \
     "$P/build-vyos-pi5-image.sh" \
+    "$P/build-vyos-pi-ab-update.sh" \
+    "$P/convert-vyos-rpi-image-to-ab.sh" \
     "$P/merge-vyos-pi5.sh" \
     "$P/install-network-firmware.sh" \
     "$P/first-boot/dhcp-wan-ssh-setup.sh" \
@@ -36,13 +38,37 @@ grep -Fq 'Default-Route aktiv:' "$P/first-boot/pi5-dhcp-wan-firstboot-wrapper.sh
 grep -Fq 'AP_IF_CACHE="${AP_IF_CACHE:-/config/photobooth-ap-interface.conf}"' "$P/first-boot/ap-dhcp-wan-setup.sh"
 grep -Fq 'PI5_VYATTACFG_REEXEC=1' "$P/first-boot/dhcp-wan-ssh-setup.sh"
 grep -Fq 'PI5_VYATTACFG_REEXEC=1' "$P/first-boot/ap-dhcp-wan-setup.sh"
+grep -Fq 'https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json' \
+    "$P/first-boot/config.boot.default"
+
+for marker in VYOS_AB VYOS_BOOT_A VYOS_BOOT_B VYOS_ROOT_A VYOS_ROOT_B; do
+    grep -Fq "$marker" "$P/build-vyos-pi5-image.sh"
+done
+grep -Fq 'tryboot_a_b=1' "$P/build-vyos-pi5-image.sh"
+grep -Fq 'boot_partition=2' "$P/build-vyos-pi5-image.sh"
+grep -Fq 'boot_partition=3' "$P/build-vyos-pi5-image.sh"
+grep -Fq 'vyos-pi-ab-auto-guard.service' "$P/build-vyos-pi5-image.sh"
+grep -Fq 'vyos_pi_image_dispatch.py --action add' "$P/build-vyos-pi5-image.sh"
 
 if grep -Fq 'fail "RPICFG partition changed during image build"' "$P/build-vyos-pi5-image.sh"; then
     echo "ERROR: old byte-identical RPICFG validation is still present" >&2
     exit 1
 fi
 
-python3 -m py_compile "$P/validate-brcm43455-firmware.py"
+for f in \
+    "$P/validate-brcm43455-firmware.py" \
+    "$P/install-vyos-pi-ab-update.py" \
+    "$P/vyos-pi-ab-auto-guard.py" \
+    "$P/vyos-pi-ab-commit.py" \
+    "$P/vyos-pi-ab-healthcheck.py" \
+    "$P/vyos-pi-ab-status.py" \
+    "$P/vyos-pi-ab-watchdog-test.py" \
+    "$P/vyos-pi-image-dispatch.py" \
+    "$P/render-release-notes.py" \
+    "$P/update-changelog.py" \
+    "$P/write-version-json.py"; do
+    python3 -m py_compile "$f"
+done
 
-echo "OK: all non-Armbian Pi 5 repo patches are present and syntactically valid"
+echo "OK: production Raspberry Pi A/B repo patches are present and syntactically valid"
 echo "NOTE: kernel Kconfig is intentionally not checked here; build/test Armbian separately."
