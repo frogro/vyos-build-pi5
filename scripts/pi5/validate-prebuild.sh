@@ -56,6 +56,8 @@ done
 grep -Fq 'tryboot_a_b=1' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'boot_partition=2' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'boot_partition=3' "$P/build-vyos-pi5-image.sh"
+grep -Fq 'FAT_ID_PREFIX=' "$P/build-vyos-pi5-image.sh"
+grep -Fq 'FAT UUID collision between VYOS_AB, VYOS_BOOT_A and VYOS_BOOT_B' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'vyos-pi-ab-auto-guard.service' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'vyos_pi_image_dispatch.py --action add' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'except KeyboardInterrupt:' "$P/install-vyos-pi-ab-update.py"

@@ -268,9 +268,10 @@ create_output_layout() {
         || fail "output partition table is not DOS/MBR"
 
     echo "==> Creating filesystems"
-    mkfs.vfat -F 32 -n VYOS_AB     "$(partdev "$OUT_LOOP" 1)" >/dev/null
-    mkfs.vfat -F 32 -n VYOS_BOOT_A "$(partdev "$OUT_LOOP" 2)" >/dev/null
-    mkfs.vfat -F 32 -n VYOS_BOOT_B "$(partdev "$OUT_LOOP" 3)" >/dev/null
+    FAT_ID_PREFIX="$(python3 -c 'import secrets; print(f"{secrets.randbits(24):06X}")')"
+    mkfs.vfat -F 32 -i "${FAT_ID_PREFIX}01" -n VYOS_AB "$(partdev "$OUT_LOOP" 1)" >/dev/null
+    mkfs.vfat -F 32 -i "${FAT_ID_PREFIX}02" -n VYOS_BOOT_A "$(partdev "$OUT_LOOP" 2)" >/dev/null
+    mkfs.vfat -F 32 -i "${FAT_ID_PREFIX}03" -n VYOS_BOOT_B "$(partdev "$OUT_LOOP" 3)" >/dev/null
     mkfs.ext4 -F -m 0 -L VYOS_ROOT_A "$(partdev "$OUT_LOOP" 5)" >/dev/null
     mkfs.ext4 -F -m 0 -L VYOS_ROOT_B "$(partdev "$OUT_LOOP" 6)" >/dev/null
     sync
@@ -655,6 +656,15 @@ validate_final_layout() {
     [[ "$(blkid -s LABEL -o value "$(partdev "$OUT_LOOP" 3)")" == "VYOS_BOOT_B" ]] || fail "p3 label mismatch"
     [[ "$(blkid -s LABEL -o value "$(partdev "$OUT_LOOP" 5)")" == "VYOS_ROOT_A" ]] || fail "p5 label mismatch"
     [[ "$(blkid -s LABEL -o value "$(partdev "$OUT_LOOP" 6)")" == "VYOS_ROOT_B" ]] || fail "p6 label mismatch"
+
+    CTRL_UUID="$(blkid -s UUID -o value "$(partdev "$OUT_LOOP" 1)")"
+    BOOT_A_UUID="$(blkid -s UUID -o value "$(partdev "$OUT_LOOP" 2)")"
+    BOOT_B_UUID="$(blkid -s UUID -o value "$(partdev "$OUT_LOOP" 3)")"
+    [[ -n "$CTRL_UUID" && -n "$BOOT_A_UUID" && -n "$BOOT_B_UUID" ]] || fail "could not determine FAT UUIDs"
+    if [[ "$CTRL_UUID" == "$BOOT_A_UUID" || "$CTRL_UUID" == "$BOOT_B_UUID" || "$BOOT_A_UUID" == "$BOOT_B_UUID" ]]; then
+        fail "FAT UUID collision between VYOS_AB, VYOS_BOOT_A and VYOS_BOOT_B"
+    fi
+    echo "    FAT UUIDs: p1=$CTRL_UUID p2=$BOOT_A_UUID p3=$BOOT_B_UUID"
 
     validate_control
     echo "==> Validating slot A"
