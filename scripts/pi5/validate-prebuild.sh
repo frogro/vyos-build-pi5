@@ -40,6 +40,14 @@ grep -Fq 'PI5_VYATTACFG_REEXEC=1' "$P/first-boot/dhcp-wan-ssh-setup.sh"
 grep -Fq 'PI5_VYATTACFG_REEXEC=1' "$P/first-boot/ap-dhcp-wan-setup.sh"
 grep -Fq 'https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json' \
     "$P/first-boot/config.boot.default"
+grep -Fq 'UPDATE_CHECK_URL="${UPDATE_CHECK_URL:-https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json}"' \
+    "$P/convert-vyos-rpi-image-to-ab.sh"
+grep -Fq 'ensure_update_check_url "$CONFIG_BOOT_OVERLAY" "$UPDATE_CHECK_URL"' \
+    "$P/convert-vyos-rpi-image-to-ab.sh"
+grep -Fq 'converted rootfs config.boot does not contain update-check URL' \
+    "$P/convert-vyos-rpi-image-to-ab.sh"
+grep -Fq 'ROOT-{slot} config.boot is missing update-check URL' \
+    "$P/convert-vyos-rpi-image-to-ab.sh"
 
 for marker in VYOS_AB VYOS_BOOT_A VYOS_BOOT_B VYOS_ROOT_A VYOS_ROOT_B; do
     grep -Fq "$marker" "$P/build-vyos-pi5-image.sh"
@@ -56,6 +64,9 @@ grep -Fq 'raise SystemExit(130)' "$P/vyos-pi-image-dispatch.py"
 grep -Fq 'reboot normally once and retry' "$P/install-vyos-pi-ab-update.py"
 grep -Fq 'reboot normally once before' "$P/install-vyos-pi-ab-update.py"
 grep -Fq 'perform one normal `sudo reboot` before installing another update' "$P/render-release-notes.py"
+grep -Fq "p.add_argument('--manual-baseline'" "$P/render-release-notes.py"
+grep -Fq "p.add_argument('--tag'" "$P/write-version-json.py"
+grep -Fq "TAG_RE = re.compile" "$P/write-version-json.py"
 grep -Fq 'perform one normal reboot before installing another update' "$P/update-changelog.py"
 
 if grep -Fq 'fail "RPICFG partition changed during image build"' "$P/build-vyos-pi5-image.sh"; then

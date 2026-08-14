@@ -34,14 +34,16 @@ set -Eeuo pipefail
 #   GZIP_LEVEL=6
 #   SOURCE_DATE_EPOCH=<unix epoch>
 #   WORKDIR_BASE=<directory for temporary files>
+#   UPDATE_CHECK_URL=<VyOS version.json URL>
 #
 # This is intentionally an offline converter: it never downloads build inputs.
 
-SCRIPT_VERSION="0.1"
+SCRIPT_VERSION="0.2"
 AB_IMAGE_SIZE_MIB="${AB_IMAGE_SIZE_MIB:-12360}"
 XZ_LEVEL="${XZ_LEVEL:-6}"
 ZSTD_LEVEL="${ZSTD_LEVEL:-10}"
 GZIP_LEVEL="${GZIP_LEVEL:-6}"
+UPDATE_CHECK_URL="${UPDATE_CHECK_URL:-https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json}"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_REPO="$(cd "${SELF_DIR}/../.." && pwd)"
 REPO="${VYOS_PI5_AB_REPO:-$DEFAULT_REPO}"
@@ -62,6 +64,89 @@ fail() {
 
 info() {
     echo "==> $*"
+}
+
+ensure_update_check_url() {
+    local config_boot="$1"
+    local url="$2"
+
+    python3 - "$config_boot" "$url" <<'PY_CONFIG'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+url = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+lines = text.splitlines(keepends=True)
+
+def brace_delta(line: str) -> int:
+    # VyOS config.boot generated syntax does not use braces in quoted URL values.
+    return line.count("{") - line.count("}")
+
+def find_block(start_pattern: re.Pattern[str], start: int, end: int, wanted_depth: int):
+    depth = 0
+    for index, line in enumerate(lines):
+        if index < start:
+            depth += brace_delta(line)
+            continue
+        if index >= end:
+            break
+        if depth == wanted_depth and start_pattern.match(line):
+            block_depth = depth + brace_delta(line)
+            for close in range(index + 1, end):
+                block_depth += brace_delta(lines[close])
+                if block_depth == depth:
+                    return index, close
+            raise SystemExit(f"ERROR: unterminated config block in {path}: {line.strip()}")
+        depth += brace_delta(line)
+    return None
+
+system = find_block(re.compile(r"^\s*system\s*\{\s*$"), 0, len(lines), 0)
+if system is None:
+    raise SystemExit(f"ERROR: {path} has no top-level system block")
+system_start, system_end = system
+
+# Determine the absolute nesting depth immediately inside the system block.
+depth_before_system = sum(brace_delta(line) for line in lines[:system_start])
+system_inner_depth = depth_before_system + 1
+update = find_block(
+    re.compile(r"^\s*update-check\s*\{\s*$"),
+    system_start + 1,
+    system_end,
+    system_inner_depth,
+)
+
+if update is None:
+    system_indent = re.match(r"^(\s*)", lines[system_start]).group(1)
+    child_indent = system_indent + "    "
+    value_indent = child_indent + "    "
+    block = [
+        f"{child_indent}update-check {{\n",
+        f'{value_indent}url "{url}"\n',
+        f"{child_indent}}}\n",
+    ]
+    lines[system_end:system_end] = block
+else:
+    update_start, update_end = update
+    update_indent = re.match(r"^(\s*)", lines[update_start]).group(1)
+    value_indent = update_indent + "    "
+    url_pattern = re.compile(r"^\s*url\s+.*$")
+    url_indexes = [
+        index for index in range(update_start + 1, update_end)
+        if url_pattern.match(lines[index].rstrip("\n"))
+    ]
+    if url_indexes:
+        first = url_indexes[0]
+        newline = "\n" if lines[first].endswith("\n") else ""
+        lines[first] = f'{value_indent}url "{url}"{newline}'
+        for extra in reversed(url_indexes[1:]):
+            del lines[extra]
+    else:
+        lines.insert(update_end, f'{value_indent}url "{url}"\n')
+
+path.write_text("".join(lines), encoding="utf-8")
+PY_CONFIG
 }
 
 usage() {
@@ -236,6 +321,7 @@ echo "    Source SHA256 : $SOURCE_SHA"
 echo "    A/B image     : $OUT_AB_XZ"
 echo "    Update bundle : $OUT_UPDATE"
 echo "    A/B repo      : $REPO"
+echo "    Update URL    : $UPDATE_CHECK_URL"
 echo
 
 info "Decompressing source image read-only working copy"
@@ -309,6 +395,17 @@ done
 [[ -f "$SRC_BOOT_MNT/overlays/pcie-32bit-dma-pi5.dtbo" ]] \
     || fail "source boot partition is missing overlays/pcie-32bit-dma-pi5.dtbo"
 
+# The published retrofit image must support `add system image latest` immediately
+# after a fresh flash.  Preserve the source config and only ensure the Pi project's
+# update-check URL is present.  The overlay is injected into the rootfs tar without
+# modifying the original source image.  Because this rootfs payload is shared by the
+# full A/B image and the generated update bundle, both outputs get the same default.
+CONFIG_BOOT_OVERLAY="${WORK}/__vyos_pi_ab_config_boot"
+cp -a "$SRC_ROOT_MNT/config/config.boot" "$CONFIG_BOOT_OVERLAY"
+ensure_update_check_url "$CONFIG_BOOT_OVERLAY" "$UPDATE_CHECK_URL"
+grep -Fq "url \"${UPDATE_CHECK_URL}\"" "$CONFIG_BOOT_OVERLAY" \
+    || fail "failed to inject system update-check URL into config.boot overlay"
+
 info "Creating rootfs payload from the existing release image"
 if command -v pigz >/dev/null 2>&1; then
     tar -C "$SRC_ROOT_MNT" \
@@ -316,7 +413,9 @@ if command -v pigz >/dev/null 2>&1; then
         --numeric-owner \
         --acls --xattrs --xattrs-include='*' \
         --one-file-system \
-        -cf - . \
+        --exclude='./config/config.boot' \
+        --transform='s#^\./__vyos_pi_ab_config_boot$#./config/config.boot#' \
+        -cf - . -C "$WORK" ./__vyos_pi_ab_config_boot \
       | pigz -"$GZIP_LEVEL" > "$ROOTFS_PAYLOAD"
 else
     tar -C "$SRC_ROOT_MNT" \
@@ -324,7 +423,9 @@ else
         --numeric-owner \
         --acls --xattrs --xattrs-include='*' \
         --one-file-system \
-        -cf - . \
+        --exclude='./config/config.boot' \
+        --transform='s#^\./__vyos_pi_ab_config_boot$#./config/config.boot#' \
+        -cf - . -C "$WORK" ./__vyos_pi_ab_config_boot \
       | gzip -"$GZIP_LEVEL" > "$ROOTFS_PAYLOAD"
 fi
 
@@ -394,7 +495,7 @@ PY
 create_runtime_payload
 
 info "Validating source version metadata and kernel/boot parity"
-python3 - "$ROOTFS_PAYLOAD" "$SRC_BOOT_MNT" "$META_JSON" <<'PY'
+python3 - "$ROOTFS_PAYLOAD" "$SRC_BOOT_MNT" "$META_JSON" "$UPDATE_CHECK_URL" <<'PY'
 from __future__ import annotations
 import hashlib
 import json
@@ -405,6 +506,7 @@ import sys
 archive = Path(sys.argv[1])
 boot_root = Path(sys.argv[2])
 out = Path(sys.argv[3])
+update_check_url = sys.argv[4]
 
 def norm(name: str) -> str:
     while name.startswith("./"):
@@ -473,6 +575,14 @@ with tarfile.open(archive, "r:gz") as tf:
     for name in required:
         if name not in members:
             raise SystemExit(f"ERROR: source rootfs is missing required member {name}")
+
+    cf = tf.extractfile(member("config/config.boot"))
+    if cf is None:
+        raise SystemExit("ERROR: cannot read converted config/config.boot")
+    config_text = cf.read().decode("utf-8", errors="replace")
+    expected = f'url "{update_check_url}"'
+    if expected not in config_text:
+        raise SystemExit("ERROR: converted rootfs config.boot does not contain update-check URL")
 
     regular_bytes = sum(m.size for m in all_members if m.isfile())
     regular_files = sum(1 for m in all_members if m.isfile())
@@ -765,7 +875,7 @@ python3 - \
     "$AB_CTL_MNT" "$AB_BOOT_A_MNT" "$AB_BOOT_B_MNT" \
     "$AB_ROOT_A_MNT" "$AB_ROOT_B_MNT" \
     "$ROOT_A_UUID" "$ROOT_B_UUID" "$BOOT_A_UUID" "$BOOT_B_UUID" \
-    "$ROOT_A_PARTUUID" "$ROOT_B_PARTUUID" "$VERSION" <<'PY'
+    "$ROOT_A_PARTUUID" "$ROOT_B_PARTUUID" "$VERSION" "$UPDATE_CHECK_URL" <<'PY'
 from pathlib import Path
 import json
 import os
@@ -773,7 +883,7 @@ import sys
 
 ctl, ba, bb, ra, rb = map(Path, sys.argv[1:6])
 root_a_uuid, root_b_uuid, boot_a_uuid, boot_b_uuid = sys.argv[6:10]
-root_a_partuuid, root_b_partuuid, version = sys.argv[10:13]
+root_a_partuuid, root_b_partuuid, version, update_check_url = sys.argv[10:14]
 
 expected_autoboot = "[all]\ntryboot_a_b=1\nboot_partition=2\n\n[tryboot]\nboot_partition=3\n"
 if (ctl / "autoboot.txt").read_text(encoding="ascii") != expected_autoboot:
@@ -788,6 +898,9 @@ for slot, root, boot, ruuid, buuid, rpart in (
         raise SystemExit(f"ERROR: ROOT-{slot} version mismatch")
     if (root / "etc/vyos-pi-ab-slot").read_text(encoding="ascii").strip() != slot:
         raise SystemExit(f"ERROR: ROOT-{slot} slot marker mismatch")
+    config_text = (root / "config/config.boot").read_text(encoding="utf-8", errors="replace")
+    if f'url "{update_check_url}"' not in config_text:
+        raise SystemExit(f"ERROR: ROOT-{slot} config.boot is missing update-check URL")
     fstab = (root / "etc/fstab").read_text(encoding="utf-8")
     if f"UUID={ruuid} / ext4" not in fstab or f"UUID={buuid} /boot/firmware vfat" not in fstab:
         raise SystemExit(f"ERROR: ROOT-{slot} fstab mismatch")

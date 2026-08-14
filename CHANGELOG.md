@@ -1,11 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Added support for a manually tagged Raspberry Pi production baseline (`-rpi-m`) while keeping future automated releases on the normal `-rpi` tag scheme.
+- `write-version-json.py` can now target an explicit release tag so `latest` can point at the manual baseline until the next successful automated release.
 
 - Handle `Ctrl+C` in the Raspberry Pi A/B installer and image dispatcher without Python tracebacks; interrupted commands exit with status 130.
 - Keep the strict safety gate that permits A/B writes only from a normal/default boot (`tryboot=0`).
 - Document the required normal reboot after a successful tryboot/auto-commit before another update may overwrite the previous rollback slot.
 - Physical Raspberry Pi validation confirmed that the existing `2026.08.14-0025-rolling` public release resolves through `add system image latest`, downloads from GitHub Releases, verifies all A/B payload SHA-256 hashes, and reaches the native A/B installer.
+- Existing-image A/B converter v0.2 now preserves the source `config.boot` while ensuring the Raspberry Pi `rolling/version.json` update-check URL is present in both full-image slots and the matching update rootfs payload.
 
 ## v2026.08.14-0025-rolling-rpi
 

@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--kernel', required=True)
     p.add_argument('--base-tag', required=True)
     p.add_argument('--upstream-notes-file', required=True)
+    p.add_argument('--manual-baseline', action='store_true', help='mark this release as a manually published production baseline')
     p.add_argument('--output', required=True)
     return p.parse_args()
 
@@ -32,9 +33,16 @@ def main() -> int:
     image = f'vyos-{a.version}-rpi-arm64.img.xz'
     update = f'vyos-{a.version}-rpi-arm64-update.tar.zst'
 
+    baseline = '''
+## Manual production baseline
+
+This release was published manually as the production baseline for the Raspberry Pi A/B release pipeline. It uses the same image layout, update bundle format, `latest` metadata source, validation rules and runtime that subsequent automated Raspberry Pi releases use. The `-m` tag suffix identifies the manual baseline only; the embedded VyOS version remains unchanged.
+''' if a.manual_baseline else ''
+
     text = f'''# VyOS {a.version} for Raspberry Pi 4 / 5
 
 Unofficial Raspberry Pi ARM64 build based directly on the corresponding official VyOS Rolling Nightly.
+{baseline}
 
 ## Official VyOS Rolling release
 

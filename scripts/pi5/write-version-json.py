@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 VERSION_RE = re.compile(r'^\d{4}\.\d{2}\.\d{2}-\d{4}-rolling$')
+TAG_RE = re.compile(r'^v\d{4}\.\d{2}\.\d{2}-\d{4}-rolling-rpi(?:-m(?:\d+)?)?$')
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,6 +16,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--version', required=True)
     p.add_argument('--timestamp', required=True)
     p.add_argument('--repository', required=True, help='owner/repository')
+    p.add_argument('--tag', help='release tag override; defaults to vVERSION-rpi')
     p.add_argument('--output', default='version.json')
     return p.parse_args()
 
@@ -30,7 +32,11 @@ def main() -> int:
     except ValueError as exc:
         raise SystemExit(f'ERROR: invalid ISO timestamp: {a.timestamp}') from exc
 
-    tag = f'v{a.version}-rpi'
+    tag = a.tag or f'v{a.version}-rpi'
+    if not TAG_RE.fullmatch(tag):
+        raise SystemExit(f'ERROR: invalid Raspberry Pi release tag: {tag}')
+    if not tag.startswith(f'v{a.version}-rpi'):
+        raise SystemExit(f'ERROR: release tag does not match version {a.version}: {tag}')
     asset = f'vyos-{a.version}-rpi-arm64-update.tar.zst'
     url = f'https://github.com/{a.repository}/releases/download/{tag}/{asset}'
     payload = [{'url': url, 'version': a.version, 'timestamp': a.timestamp}]

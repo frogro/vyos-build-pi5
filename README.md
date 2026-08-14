@@ -189,6 +189,14 @@ The first-boot marker is:
 
 ---
 
+## Manual baseline releases
+
+A manually published production baseline may use a tag such as `v2026.08.14-0025-rolling-rpi-m`. The `-m` suffix identifies only the release publication method; the VyOS version inside the image and update bundle remains `2026.08.14-0025-rolling`.
+
+The manual baseline is built and validated with the same Raspberry Pi A/B image layout, update-bundle format, dispatcher, watchdog guard and `rolling/version.json` update source used by the automated release workflow. Automated releases continue to use the normal `vVERSION-rpi` tag format and replace the latest pointer after a successful publish.
+
+`write-version-json.py` accepts `--tag` for this purpose. Omitting `--tag` preserves the automated `vVERSION-rpi` behavior.
+
 ## A/B System Updates
 
 Current production images use two boot/root slots: A and B. Updates are written only to the inactive slot, while the currently running/default slot remains untouched as the rollback image.
@@ -199,7 +207,7 @@ Check the current slot state:
 sudo /usr/libexec/vyos/vyos-pi-ab-status.py
 ```
 
-Fresh images are preconfigured to use this repository's `rolling/version.json` metadata for the latest Raspberry Pi A/B release. Install the latest published update with:
+Fresh images are preconfigured to use this repository's `rolling/version.json` metadata for the latest Raspberry Pi A/B release. The existing-image A/B converter also preserves the source configuration while ensuring this update-check URL is present, so a freshly flashed retrofitted A/B image can resolve `latest` immediately once networking and DNS are available. Install the latest published update with:
 
 ```text
 add system image latest
