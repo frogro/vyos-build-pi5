@@ -76,6 +76,29 @@ def mount_is_rw(target: str) -> bool:
     return "rw" in options.split(",")
 
 
+
+
+def check_update_metadata_config() -> str:
+    try:
+        from vyos.configquery import ConfigTreeQuery  # type: ignore
+    except Exception as exc:
+        raise ABError(f"cannot import VyOS ConfigTreeQuery: {exc}") from exc
+
+    path = "system update-check url"
+    try:
+        config = ConfigTreeQuery()
+        if not config.exists(path):
+            raise ABError("system update-check url is missing from the running configuration")
+        value = config.value(path)
+    except ABError:
+        raise
+    except Exception as exc:
+        raise ABError(f"cannot read running system update-check url: {exc}") from exc
+
+    if not value or not str(value).startswith(("https://", "http://")):
+        raise ABError(f"system update-check url is empty or invalid: {value!r}")
+    return str(value)
+
 def device_for_label(label: str) -> str:
     result = run("blkid", "-L", label, check=False)
     device = result.stdout.strip()
@@ -431,6 +454,9 @@ def main() -> int:
 
     wait_for_vyos(args.timeout, args.interval)
     ok("systemd is running and core VyOS units are active")
+
+    update_url = check_update_metadata_config()
+    ok(f"system update-check URL is loaded: {update_url}")
 
     _state, default_slot, tryboot_slot = read_autoboot_state()
     if dt_tryboot == 1:

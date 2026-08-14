@@ -283,6 +283,15 @@ with tarfile.open(archive, "r:*") as tf:
         if required not in members:
             raise SystemExit(f"ERROR: merged rootfs is missing required member {required}")
 
+    config_member = member("config/config.boot")
+    config_file = tf.extractfile(config_member)
+    if config_file is None:
+        raise SystemExit("ERROR: cannot read merged rootfs config/config.boot")
+    config_text = config_file.read().decode("utf-8", errors="replace")
+    expected_update_url = "https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"
+    if expected_update_url not in config_text:
+        raise SystemExit("ERROR: merged rootfs system update-check URL is missing")
+
     regular_bytes = sum(m.size for m in tf.getmembers() if m.isfile())
     file_count = sum(1 for m in tf.getmembers() if m.isfile())
 

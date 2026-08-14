@@ -11,8 +11,8 @@ Tryboot:
   * keeps it alive while the read-only A/B healthcheck waits for VyOS startup
   * if healthcheck FAILS: stops pinging and leaves the watchdog open so the Pi
     resets after the watchdog timeout; the old default slot then boots
-  * if healthcheck SUCCEEDS: disarms the watchdog first, then commits the healthy
-    running slot as the new default
+  * if healthcheck SUCCEEDS: disarms the watchdog first, commits the healthy
+    running slot as the new default, then requests one final normal reboot
 
 Disarming BEFORE commit deliberately removes the dangerous window where a
 watchdog reset after changing autoboot.txt could reboot into a half-committed
@@ -501,6 +501,20 @@ def main() -> int:
     log("")
     log(f"AUTO-GUARD SUCCESS: slot {running_slot} is healthy and now the default.")
     log(f"Rollback slot      : {other_slot}")
+    log("Requesting one final normal reboot to leave Raspberry Pi tryboot mode.")
+    try:
+        os.sync()
+    except OSError:
+        pass
+    reboot_result = run("/usr/bin/systemctl", "--no-block", "reboot", check=False)
+    if reboot_result.returncode != 0:
+        detail = reboot_result.stderr.strip() or reboot_result.stdout.strip()
+        log(
+            "WARNING: slot commit succeeded, but the final normal reboot request "
+            f"failed{': ' + detail if detail else ''}. Run sudo reboot manually."
+        )
+        return 0
+    log("Final normal reboot scheduled; the committed slot will boot with tryboot=0.")
     return 0
 
 

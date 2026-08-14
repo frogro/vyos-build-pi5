@@ -585,6 +585,8 @@ validate_slot() {
     fi
 
     [[ -f "$ROOT_MNT/config/config.boot" ]] || fail "ROOT-${slot} VyOS config.boot missing"
+    grep -Fq 'url "https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"' "$ROOT_MNT/config/config.boot" \
+        || fail "ROOT-${slot} system update-check URL missing"
     [[ -L "$ROOT_MNT/etc/systemd/system/timers.target.wants/pi5-dhcp-wan-firstboot.timer" ]] \
         || fail "ROOT-${slot} Pi first-boot timer is not enabled"
     [[ -x "$ROOT_MNT/home/vyos/ap-dhcp-wan-setup.sh" ]] \

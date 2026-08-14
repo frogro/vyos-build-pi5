@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- A/B update UX v0.6 hides the Raspberry Pi `tryboot` command during the normal interactive update path: after a successful install the dispatcher offers to reboot into the test slot.
+- After a healthy tryboot is committed, the automatic guard requests one final normal reboot so the new default returns with `tryboot=0`; failed or hung test boots still roll back to the previous default slot.
+- A/B installer v0.6 now preserves a copied custom `system update-check url` and injects the project rolling metadata URL when the copied configuration has no update source; the runtime healthcheck refuses to commit a test slot if the update URL is missing from the loaded VyOS configuration.
+- The manual `v2026.08.14-0025-rolling-rpi-m` baseline can be rebuilt from this v0.6 code and subsequent automated releases inherit the same update and reboot behavior.
 - Added support for a manually tagged Raspberry Pi production baseline (`-rpi-m`) while keeping future automated releases on the normal `-rpi` tag scheme.
 - `write-version-json.py` can now target an explicit release tag so `latest` can point at the manual baseline until the next successful automated release.
 

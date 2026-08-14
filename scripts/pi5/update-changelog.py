@@ -36,7 +36,8 @@ def main() -> int:
 - Fresh-install `.img.xz` uses the production Raspberry Pi A/B partition layout.
 - Matching `update.tar.zst` is published for `add system image` local, HTTP(S), and `latest` updates.
 - A/B `tryboot`, automatic health-check/commit and hardware-watchdog rollback have been validated on physical Raspberry Pi hardware.
-- A/B updates are intentionally accepted only from a normal/default boot; after a successful tryboot/auto-commit, perform one normal reboot before installing another update.
+- Interactive A/B updates offer the test reboot automatically; a healthy test slot is committed and then rebooted once more into normal mode. Failed or hung test boots roll back to the previous default slot.
+- Installer v0.6 preserves a copied custom update metadata URL, injects the Raspberry Pi rolling metadata URL when missing, and requires the running test slot to expose an update URL before commit.
 - Published automatically after A/B full-image and update-bundle QA.
 - See the linked official VyOS release for the upstream VyOS changes contained in this build.
 '''

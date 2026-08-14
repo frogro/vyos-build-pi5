@@ -2,7 +2,7 @@
 """
 VyOS Raspberry Pi A/B update bundle validator and inactive-slot installer.
 
-v0.5 supports two explicit modes:
+v0.6 supports two explicit modes:
 
   --dry-run   Validate the bundle and print the exact A/B update plan.
   --install   Erase and rewrite ONLY the inactive A/B slot, preserving its
@@ -10,15 +10,13 @@ v0.5 supports two explicit modes:
               VYOS_AB control partition are never modified.
 
 After a successful --install, the new slot is left as the existing one-shot
-tryboot target. This program does not reboot automatically. Test it with:
-
-  reboot '0 tryboot'
-
-The new slot must pass the separate healthcheck before it is committed as the
-new default. If it hangs before commit, the hardware watchdog/tryboot design
+tryboot target. The image dispatcher offers an interactive reboot after a successful install.
+That reboot uses Raspberry Pi tryboot internally; the new slot must pass the
+separate healthcheck before it is committed as the new default. If it hangs
+before commit, the hardware watchdog/tryboot design
 allows the old default slot to return.
 
-v0.5 installs the automatic tryboot watchdog guard and the `add system image`
+v0.6 installs the automatic tryboot watchdog guard and the `add system image`
 dispatcher from the bundle runtime payload. The installer itself accepts local
 bundles only; the dispatcher handles HTTP(S) and `latest` downloads before
 calling it. Publisher signatures are not yet implemented.
@@ -38,12 +36,14 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import posixpath
+import re
 import subprocess
 import sys
 import tempfile
 from typing import Iterator
 
-INSTALLER_VERSION = "0.5"
+INSTALLER_VERSION = "0.6"
+DEFAULT_UPDATE_CHECK_URL = "https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"
 
 CONTROL_LABEL = "VYOS_AB"
 BOOT_LABELS = {"A": "VYOS_BOOT_A", "B": "VYOS_BOOT_B"}
@@ -1007,6 +1007,122 @@ def copy_active_config(root: Path) -> None:
     )
 
 
+def _brace_delta(line: str) -> int:
+    return line.count("{") - line.count("}")
+
+
+def _find_config_block(
+    lines: list[str],
+    start_pattern: re.Pattern[str],
+    start: int,
+    end: int,
+    wanted_depth: int,
+) -> tuple[int, int] | None:
+    depth = 0
+    for index, line in enumerate(lines):
+        if index < start:
+            depth += _brace_delta(line)
+            continue
+        if index >= end:
+            break
+        if depth == wanted_depth and start_pattern.match(line):
+            block_depth = depth + _brace_delta(line)
+            for close in range(index + 1, end):
+                block_depth += _brace_delta(lines[close])
+                if block_depth == depth:
+                    return index, close
+            raise ABError(f"unterminated configuration block: {line.strip()}")
+        depth += _brace_delta(line)
+    return None
+
+
+def read_update_check_url(path: Path) -> str | None:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError as exc:
+        raise ABError(f"cannot read {path}: {exc}") from exc
+
+    system = _find_config_block(
+        lines, re.compile(r"^\s*system\s*\{\s*$"), 0, len(lines), 0
+    )
+    if system is None:
+        return None
+    system_start, system_end = system
+    system_inner_depth = 1 + sum(_brace_delta(line) for line in lines[:system_start])
+    update = _find_config_block(
+        lines,
+        re.compile(r"^\s*update-check\s*\{\s*$"),
+        system_start + 1,
+        system_end,
+        system_inner_depth,
+    )
+    if update is None:
+        return None
+
+    update_start, update_end = update
+    url_pattern = re.compile(r'^\s*url\s+(?:"([^"]+)"|(\S+))\s*$')
+    for line in lines[update_start + 1 : update_end]:
+        match = url_pattern.match(line.rstrip("\n"))
+        if match:
+            value = match.group(1) or match.group(2)
+            if value:
+                return value
+    return None
+
+
+def ensure_update_check_url(path: Path) -> str:
+    existing = read_update_check_url(path)
+    if existing:
+        return existing
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError as exc:
+        raise ABError(f"cannot read {path}: {exc}") from exc
+
+    system = _find_config_block(
+        lines, re.compile(r"^\s*system\s*\{\s*$"), 0, len(lines), 0
+    )
+    if system is None:
+        raise ABError(f"{path} has no top-level system block")
+    system_start, system_end = system
+    system_inner_depth = 1 + sum(_brace_delta(line) for line in lines[:system_start])
+    update = _find_config_block(
+        lines,
+        re.compile(r"^\s*update-check\s*\{\s*$"),
+        system_start + 1,
+        system_end,
+        system_inner_depth,
+    )
+
+    if update is None:
+        system_indent = re.match(r"^(\s*)", lines[system_start]).group(1)
+        child_indent = system_indent + "    "
+        value_indent = child_indent + "    "
+        lines[system_end:system_end] = [
+            f"{child_indent}update-check {{\n",
+            f'{value_indent}url "{DEFAULT_UPDATE_CHECK_URL}"\n',
+            f"{child_indent}}}\n",
+        ]
+    else:
+        update_start, update_end = update
+        update_indent = re.match(r"^(\s*)", lines[update_start]).group(1)
+        value_indent = update_indent + "    "
+        lines[update_end:update_end] = [
+            f'{value_indent}url "{DEFAULT_UPDATE_CHECK_URL}"\n'
+        ]
+
+    try:
+        path.write_text("".join(lines), encoding="utf-8")
+    except OSError as exc:
+        raise ABError(f"cannot update {path}: {exc}") from exc
+
+    final = read_update_check_url(path)
+    if not final:
+        raise ABError(f"failed to ensure system update-check URL in {path}")
+    return final
+
+
 def copy_active_ssh_keys(root: Path) -> None:
     keys = ssh_host_key_paths()
     if not keys:
@@ -1280,6 +1396,9 @@ def validate_offline_slot(
             config_boot = root / "config/config.boot"
             if not config_boot.is_file() or config_boot.stat().st_size <= 0:
                 raise ABError(f"ROOT-{slot} /config/config.boot is missing/empty")
+            update_url = read_update_check_url(config_boot)
+            if not update_url:
+                raise ABError(f"ROOT-{slot} system update-check URL is missing")
 
             timer = (
                 root
@@ -1295,8 +1414,6 @@ def validate_offline_slot(
             for rel in REQUIRED_BRCM43455:
                 resolve_in_rootfs(root, rel)
 
-            if copied_config:
-                validate_config_copy(root)
             if copied_ssh:
                 validate_ssh_key_copy(root)
 
@@ -1349,6 +1466,10 @@ def install_inactive_slot(
         if copy_config:
             print("==> Copying active /config")
             copy_active_config(root)
+            validate_config_copy(root)
+
+        target_update_url = ensure_update_check_url(root / "config/config.boot")
+        print(f"==> Target system update-check URL: {target_update_url}")
 
         if copy_ssh:
             print("==> Copying active SSH host keys")
@@ -1697,17 +1818,14 @@ def main() -> int:
     print(f"Default remains      : {default_after}")
     print(f"Tryboot target       : {tryboot_after}")
     print()
-    print("No reboot was performed.")
-    print("Next hardware-test command:")
-    print("  sudo reboot '0 tryboot'")
-    print()
     print(
-        "After the test slot boots, the installed automatic guard will arm the "
-        "hardware watchdog, run the healthcheck, and commit only if healthy."
+        "The image dispatcher can now reboot into the test slot automatically. "
+        "The installed guard will arm the hardware watchdog, run the healthcheck, "
+        "commit only if healthy, and then request one final normal reboot."
     )
     print(
-        "After a successful tryboot/auto-commit, reboot normally once before "
-        "installing another update."
+        "If the test boot fails or hangs before commit, the previous default slot "
+        "remains the rollback target."
     )
     print(
         f"NOTE: v{INSTALLER_VERSION} verifies SHA-256 integrity but does not yet provide a "

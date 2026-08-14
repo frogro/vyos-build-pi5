@@ -103,9 +103,13 @@ Latest published Raspberry Pi A/B release:
 
 Fresh images are preconfigured to use this repository's `rolling/version.json` as the Raspberry Pi update metadata source for `latest`.
 
-Updates are written only to the inactive slot. On `reboot '0 tryboot'`, the automatic A/B guard arms the Raspberry Pi hardware watchdog and runs the VyOS health check. A healthy slot is committed as the new default. If the health check fails, the watchdog remains armed so the system resets and returns to the previous default slot.
+Updates are written only to the inactive slot. After a successful interactive install, the dispatcher offers to reboot and test the new image immediately. The Raspberry Pi-specific `tryboot` command stays internal during the normal update flow.
 
-After a successful tryboot/auto-commit, perform one normal `sudo reboot` before installing another update. The installer intentionally accepts writes only from a normal/default boot (`tryboot=0`), keeping the previous slot as a known-good rollback target until the new default has also completed a normal boot.
+During the one-shot test boot, the automatic A/B guard arms the hardware watchdog and runs the VyOS health check. A healthy slot is committed as the new default and the guard requests one final normal reboot automatically. If the health check fails or the system hangs, the new slot is not committed; the watchdog resets the Raspberry Pi and the previous working/default slot boots again.
+
+When `/config` is copied to the new slot, installer v0.6 preserves an existing custom `system update-check url` and injects this repository's rolling metadata URL when no update source is present. The healthcheck verifies that an update URL is loaded before the test slot can be committed.
+
+The installer accepts writes only from a normal/default boot (`tryboot=0`), keeping the previous slot as a known-good rollback target until the new default has completed a normal boot.
 
 ## Automated validation
 

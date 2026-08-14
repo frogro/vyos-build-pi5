@@ -24,6 +24,8 @@ import sys
 from urllib.parse import urlparse
 from uuid import uuid4
 
+DISPATCHER_REBOOT_PROMPT = "Reboot and test the new image now? [Y/n] "
+
 from vyos.remote import download
 
 ORIGINAL_INSTALLER = Path("/usr/libexec/vyos/op_mode/image_installer.py")
@@ -270,6 +272,56 @@ def validate_ab_bundle(path: Path) -> None:
         )
 
 
+def ask_yes_no(prompt: str, *, default: bool = True) -> bool:
+    suffix_default = "y" if default else "n"
+    while True:
+        answer = input(prompt).strip().lower()
+        if not answer:
+            return default
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        print(f"Please answer y or n (default {suffix_default}).")
+
+
+def request_tryboot_reboot(*, no_prompt: bool) -> int:
+    # Never reboot implicitly for non-interactive callers.  Interactive VyOS
+    # users get a simple final question while the Pi-specific tryboot detail
+    # stays behind the normal `add system image` command.
+    if no_prompt:
+        print("Update installed. Reboot was not requested in --no-prompt mode.")
+        print("To test the new slot later, run: sudo reboot '0 tryboot'")
+        return 0
+
+    print()
+    print("The new image is installed in the inactive A/B slot.")
+    print("It will be booted once in test mode. If its health check fails, the")
+    print("previous working slot remains the default and is restored automatically.")
+    try:
+        reboot_now = ask_yes_no(DISPATCHER_REBOOT_PROMPT, default=True)
+    except KeyboardInterrupt:
+        print("\nReboot cancelled; the update remains installed in the inactive slot.")
+        print("To test the new slot later, run: sudo reboot '0 tryboot'")
+        return 0
+    if not reboot_now:
+        print("Reboot deferred. To test the new slot later, run: sudo reboot '0 tryboot'")
+        return 0
+
+    print("Rebooting into the new image for automatic A/B validation...")
+    try:
+        os.sync()
+    except OSError:
+        pass
+    result = subprocess.run(["/sbin/reboot", "0 tryboot"], check=False)
+    if result.returncode != 0:
+        raise DispatchError(
+            f"update installed, but tryboot reboot failed with exit code {result.returncode}; "
+            "run sudo reboot '0 tryboot' manually"
+        )
+    return 0
+
+
 def run_ab_installer(
     local_path: Path,
     *,
@@ -385,7 +437,7 @@ def main() -> int:
                 args.password,
             )
             validate_ab_bundle(downloaded_path)
-            return run_ab_installer(
+            install_rc = run_ab_installer(
                 downloaded_path,
                 source=source_description,
                 no_prompt=args.no_prompt,
@@ -404,6 +456,10 @@ def main() -> int:
                 except FileNotFoundError:
                     pass
 
+        if install_rc != 0:
+            return install_rc
+        return request_tryboot_reboot(no_prompt=args.no_prompt)
+
     local_path = Path(image_path).expanduser()
     if not local_path.is_file():
         raise DispatchError(
@@ -411,11 +467,14 @@ def main() -> int:
         )
 
     validate_ab_bundle(local_path)
-    return run_ab_installer(
+    install_rc = run_ab_installer(
         local_path,
         source=source_description,
         no_prompt=args.no_prompt,
     )
+    if install_rc != 0:
+        return install_rc
+    return request_tryboot_reboot(no_prompt=args.no_prompt)
 
 
 if __name__ == "__main__":
