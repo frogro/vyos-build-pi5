@@ -161,6 +161,7 @@ jobs:
             vyos-build:rolling-arm64 \
             bash -lc '
               set -euo pipefail
+              git config --global --add safe.directory /src/vyos-1x
               cd /src/vyos-1x
               dpkg-buildpackage -uc -us -tc -b
 
