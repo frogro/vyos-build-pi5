@@ -215,7 +215,7 @@ add system image latest
 
 Local `.tar.zst` bundles and direct HTTP(S) bundle URLs are supported as well. The installer verifies the bundle manifest and SHA-256 hashes before it offers to write the inactive slot.
 
-After the inactive slot has been written successfully, v0.6+ releases ask:
+After the inactive slot has been written successfully, v0.7+ releases ask:
 
 ```text
 Reboot and test the new image now? [Y/n]
@@ -223,14 +223,17 @@ Reboot and test the new image now? [Y/n]
 
 Accepting the default starts the Raspberry Pi one-shot test boot automatically. The Pi-specific `tryboot` command is an implementation detail and normally does not need to be entered by the user. During the test boot the automatic A/B guard arms the hardware watchdog and runs the health check.
 
-- **Healthy test boot:** the new slot is committed as the default and the guard requests one additional normal reboot automatically. After that boot the new slot is running with `tryboot=0` and normal updates are enabled again.
-- **Failed or hung test boot:** the new slot is not committed. The watchdog resets the Raspberry Pi and the previous working/default slot boots again automatically.
+- **Healthy test boot:** the healthcheck reports **PASSED** on the system console, the new slot is committed as the default, and after a short notice the guard requests one additional normal reboot automatically. After that boot the new slot is running with `tryboot=0`. The next interactive login shows that the update was successfully activated.
+- **Failed healthcheck:** the guard reports **FAILED** on the system console, explicitly states that the new image was not activated and may be faulty, incomplete, or incompatible, then lets the watchdog return to the previous working/default slot automatically. No confirmation is required for rollback.
+- **Hung test boot:** the persistent `testing` marker remains on the shared `VYOS_AB` partition. When the watchdog returns to the previous default slot, the next interactive login explains that the test image did not complete validation and was rolled back.
 - **Reboot deferred:** if `n` is selected, start the test later with `sudo reboot '0 tryboot'`. A successful test will still perform the final normal reboot automatically.
 
 > [!IMPORTANT]
-> A new update is accepted only from a normal/default boot (`tryboot=0`). This prevents the previous known-good rollback slot from being overwritten before the new default slot has completed a normal boot. v0.6+ performs the test reboot and the final normal reboot automatically during the normal interactive update flow.
+> A new update is accepted only from a normal/default boot (`tryboot=0`). This prevents the previous known-good rollback slot from being overwritten before the new default slot has completed a normal boot. v0.7+ performs the test reboot and the final normal reboot automatically during the normal interactive update flow.
 
-When the current configuration is copied into the inactive slot, v0.6 preserves an existing custom `system update-check url`. If no update URL is present, the Raspberry Pi project default is injected automatically. The test-slot healthcheck also verifies that the URL is present in the running VyOS configuration before the slot can be committed as the new default.
+When the current configuration is copied into the inactive slot, v0.7 preserves an existing custom `system update-check url`. If no update URL is present, the Raspberry Pi project default is injected automatically. The test-slot healthcheck also verifies that the URL is present in the running VyOS configuration before the slot can be committed as the new default.
+
+The automatic Nightly discovery path uses the official VyOS `rolling/version.json` pointer and verifies the downloaded ISO with Minisign. It deliberately avoids unauthenticated `api.github.com` release/commit lookups; if an official ISO contains an abbreviated `build_git`, the full commit is resolved through the public Git protocol instead. This avoids shared-runner REST rate-limit failures while preserving exact source pinning.
 
 If `add system image latest` cannot resolve an update URL, verify the configured metadata source:
 

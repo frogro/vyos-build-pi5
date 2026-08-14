@@ -296,8 +296,10 @@ def request_tryboot_reboot(*, no_prompt: bool) -> int:
 
     print()
     print("The new image is installed in the inactive A/B slot.")
-    print("It will be booted once in test mode. If its health check fails, the")
-    print("previous working slot remains the default and is restored automatically.")
+    print("It will be booted once in test mode and validated automatically.")
+    print("If validation succeeds, the new slot is committed and the system performs")
+    print("one final normal reboot automatically. If validation fails or the test boot")
+    print("hangs, the previous working slot is restored automatically.")
     try:
         reboot_now = ask_yes_no(DISPATCHER_REBOOT_PROMPT, default=True)
     except KeyboardInterrupt:
@@ -309,6 +311,8 @@ def request_tryboot_reboot(*, no_prompt: bool) -> int:
         return 0
 
     print("Rebooting into the new image for automatic A/B validation...")
+    print("This session will disconnect. The test boot will report PASS/FAIL on the")
+    print("system console, and the next normal login will show the final update result.")
     try:
         os.sync()
     except OSError:

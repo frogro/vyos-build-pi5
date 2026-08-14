@@ -60,58 +60,53 @@ jobs:
         env:
           REQUESTED_VERSION: ${{ inputs.vyos_version }}
           FORCE_BUILD: ${{ inputs.force }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          POINTER_ISO=""
+          # Use the official VyOS rolling pointer and signed release assets as the
+          # source of truth.  Do not make unauthenticated api.github.com calls:
+          # GitHub-hosted runners share public egress addresses and those REST
+          # requests are subject to the small unauthenticated per-IP rate limit.
+          curl --fail --location --retry 5 --retry-all-errors \
+            https://raw.githubusercontent.com/vyos/vyos-nightly-build/rolling/version.json \
+            -o upstream-pointer.json
+
+          LATEST_VERSION="$(jq -r '.[0].version' upstream-pointer.json)"
+          LATEST_ISO="$(jq -r '.[0].url' upstream-pointer.json)"
+          LATEST_TIMESTAMP="$(jq -r '.[0].timestamp' upstream-pointer.json)"
+
+          [[ "$LATEST_VERSION" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{4}-rolling$ ]]
+          [[ "$LATEST_ISO" == https://github.com/vyos/vyos-nightly-build/releases/download/* ]]
+          [[ "$LATEST_TIMESTAMP" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
 
           if [ -n "${REQUESTED_VERSION:-}" ]; then
             VERSION="$REQUESTED_VERSION"
           else
-            curl --fail --location --retry 5 \
-              https://raw.githubusercontent.com/vyos/vyos-nightly-build/rolling/version.json \
-              -o upstream-pointer.json
-
-            VERSION="$(jq -r '.[0].version' upstream-pointer.json)"
-            POINTER_ISO="$(jq -r '.[0].url' upstream-pointer.json)"
+            VERSION="$LATEST_VERSION"
           fi
 
           [[ "$VERSION" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]{4}-rolling$ ]]
 
-          curl --fail --location --retry 5 \
-            "https://api.github.com/repos/vyos/vyos-nightly-build/releases/tags/$VERSION" \
-            -o upstream-release.json
-
-          UPSTREAM_NAME="$(jq -r '.name // .tag_name' upstream-release.json)"
-          UPSTREAM_PUBLISHED="$(jq -r '.published_at // ""' upstream-release.json)"
-          UPSTREAM_URL="$(jq -r '.html_url' upstream-release.json)"
-          jq -r '.body // ""' upstream-release.json > upstream-release-body.md
-
-          ISO_URL="$(
-            jq -r '
-              .assets[]
-              | select(.name | endswith("-generic-amd64.iso"))
-              | .browser_download_url
-            ' upstream-release.json | head -n1
-          )"
-
-          SIG_URL="$(
-            jq -r '
-              .assets[]
-              | select(.name | endswith("-generic-amd64.iso.minisig"))
-              | .browser_download_url
-            ' upstream-release.json | head -n1
-          )"
-
-          test -n "$ISO_URL"
-          test "$ISO_URL" != "null"
-          test -n "$SIG_URL"
-          test "$SIG_URL" != "null"
-
-          if [ -n "$POINTER_ISO" ]; then
-            test "$POINTER_ISO" = "$ISO_URL"
+          if [ "$VERSION" = "$LATEST_VERSION" ]; then
+            ISO_URL="$LATEST_ISO"
+            UPSTREAM_PUBLISHED="$LATEST_TIMESTAMP"
+          else
+            ISO_URL="https://github.com/vyos/vyos-nightly-build/releases/download/${VERSION}/vyos-${VERSION}-generic-amd64.iso"
+            DATE_PART="${VERSION%%-*}"
+            TIME_PART="${VERSION#*-}"
+            TIME_PART="${TIME_PART%-rolling}"
+            UPSTREAM_PUBLISHED="${DATE_PART//./-}T${TIME_PART:0:2}:${TIME_PART:2:2}:00Z"
           fi
+
+          SIG_URL="${ISO_URL}.minisig"
+          UPSTREAM_NAME="$VERSION"
+          UPSTREAM_URL="https://github.com/vyos/vyos-nightly-build/releases/tag/${VERSION}"
+
+          cat > upstream-release-body.md <<EOF
+          Official VyOS Rolling release: ${UPSTREAM_URL}
+
+          The Raspberry Pi automation validates the official signed ISO directly.
+          EOF
 
           TAG="v${VERSION}-rpi"
 
@@ -123,9 +118,9 @@ jobs:
             exit 0
           fi
 
-          curl --fail --location --retry 5 "$ISO_URL" -o upstream.iso
-          curl --fail --location --retry 5 "$SIG_URL" -o upstream.iso.minisig
-          curl --fail --location --retry 5 \
+          curl --fail --location --retry 5 --retry-all-errors "$ISO_URL" -o upstream.iso
+          curl --fail --location --retry 5 --retry-all-errors "$SIG_URL" -o upstream.iso.minisig
+          curl --fail --location --retry 5 --retry-all-errors \
             https://raw.githubusercontent.com/vyos/vyos-nightly-build/rolling/minisign.pub \
             -o minisign.pub
 
@@ -151,14 +146,56 @@ jobs:
           ' upstream-vyos-version.json
 
           BUILD_GIT="$(jq -r '.build_git' upstream-vyos-version.json)"
+          BUILD_BRANCH="$(jq -r '.build_branch // ""' upstream-vyos-version.json)"
 
           [[ "$BUILD_GIT" =~ ^[0-9a-f]{7,40}$ ]]
 
-          curl --fail --location --retry 5 \
-            "https://api.github.com/repos/vyos/vyos-build/commits/$BUILD_GIT" \
-            -o vyos-build-commit.json
+          # The ISO normally records a full commit.  If an upstream build ever
+          # records an abbreviated SHA, resolve it through the public Git smart
+          # protocol instead of the GitHub REST API.
+          if [[ "$BUILD_GIT" =~ ^[0-9a-f]{40}$ ]]; then
+            VYOS_REF="$BUILD_GIT"
+          else
+            LOOKUP_REPO="$RUNNER_TEMP/vyos-build-commit-lookup"
+            rm -rf "$LOOKUP_REPO"
+            git init -q "$LOOKUP_REPO"
+            git -C "$LOOKUP_REPO" remote add origin https://github.com/vyos/vyos-build.git
 
-          VYOS_REF="$(jq -r '.sha' vyos-build-commit.json)"
+            LOOKUP_REF=""
+            if [ -n "$BUILD_BRANCH" ] \
+               && git ls-remote --exit-code --heads \
+                    https://github.com/vyos/vyos-build.git \
+                    "refs/heads/$BUILD_BRANCH" >/dev/null 2>&1; then
+              LOOKUP_REF="refs/heads/$BUILD_BRANCH"
+            else
+              LOOKUP_REF="$(
+                git ls-remote --symref https://github.com/vyos/vyos-build.git HEAD |
+                awk '$1 == "ref:" {print $2; exit}'
+              )"
+            fi
+            test -n "$LOOKUP_REF"
+
+            git -C "$LOOKUP_REPO" fetch -q \
+              --filter=blob:none \
+              --no-tags \
+              --depth=4096 \
+              origin "$LOOKUP_REF"
+
+            VYOS_REF="$(
+              git -C "$LOOKUP_REPO" rev-parse "${BUILD_GIT}^{commit}" 2>/dev/null || true
+            )"
+
+            if [[ ! "$VYOS_REF" =~ ^[0-9a-f]{40}$ ]]; then
+              git -C "$LOOKUP_REPO" fetch -q \
+                --filter=blob:none \
+                --no-tags \
+                --deepen=16384 \
+                origin "$LOOKUP_REF"
+              VYOS_REF="$(
+                git -C "$LOOKUP_REPO" rev-parse "${BUILD_GIT}^{commit}" 2>/dev/null || true
+              )"
+            fi
+          fi
 
           [[ "$VYOS_REF" =~ ^[0-9a-f]{40}$ ]]
           [[ "$VYOS_REF" == "$BUILD_GIT"* ]]
@@ -194,6 +231,7 @@ jobs:
           echo "Podman:                $PODMAN_VERSION"
           echo "vyos-1x:               $VYOS1X_VERSION"
           echo "Official ISO signature verification: PASS"
+          echo "REST-free upstream discovery: PASS"
 
           {
             echo "should_build=true"

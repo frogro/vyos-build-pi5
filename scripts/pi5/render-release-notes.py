@@ -105,9 +105,9 @@ Fresh images are preconfigured to use this repository's `rolling/version.json` a
 
 Updates are written only to the inactive slot. After a successful interactive install, the dispatcher offers to reboot and test the new image immediately. The Raspberry Pi-specific `tryboot` command stays internal during the normal update flow.
 
-During the one-shot test boot, the automatic A/B guard arms the hardware watchdog and runs the VyOS health check. A healthy slot is committed as the new default and the guard requests one final normal reboot automatically. If the health check fails or the system hangs, the new slot is not committed; the watchdog resets the Raspberry Pi and the previous working/default slot boots again.
+During the one-shot test boot, the automatic A/B guard arms the hardware watchdog and runs the VyOS health check. A healthy slot reports validation PASSED on the system console, is committed as the new default, and after a short notice the guard requests one final normal reboot automatically. A failed validation reports FAILED and returns automatically to the previous default slot; a hung test boot is recovered by the watchdog. The result is persisted on the shared A/B control partition so the next normal interactive login reports successful activation or rollback.
 
-When `/config` is copied to the new slot, installer v0.6 preserves an existing custom `system update-check url` and injects this repository's rolling metadata URL when no update source is present. The healthcheck verifies that an update URL is loaded before the test slot can be committed.
+When `/config` is copied to the new slot, installer v0.7 preserves an existing custom `system update-check url` and injects this repository's rolling metadata URL when no update source is present. The healthcheck verifies that an update URL is loaded before the test slot can be committed.
 
 The installer accepts writes only from a normal/default boot (`tryboot=0`), keeping the previous slot as a known-good rollback target until the new default has completed a normal boot.
 

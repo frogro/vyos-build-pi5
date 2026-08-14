@@ -2,7 +2,7 @@
 """
 VyOS Raspberry Pi A/B update bundle validator and inactive-slot installer.
 
-v0.6 supports two explicit modes:
+v0.7 supports two explicit modes:
 
   --dry-run   Validate the bundle and print the exact A/B update plan.
   --install   Erase and rewrite ONLY the inactive A/B slot, preserving its
@@ -16,7 +16,7 @@ separate healthcheck before it is committed as the new default. If it hangs
 before commit, the hardware watchdog/tryboot design
 allows the old default slot to return.
 
-v0.6 installs the automatic tryboot watchdog guard and the `add system image`
+v0.7 installs the automatic tryboot watchdog guard and the `add system image`
 dispatcher from the bundle runtime payload. The installer itself accepts local
 bundles only; the dispatcher handles HTTP(S) and `latest` downloads before
 calling it. Publisher signatures are not yet implemented.
@@ -42,7 +42,7 @@ import sys
 import tempfile
 from typing import Iterator
 
-INSTALLER_VERSION = "0.6"
+INSTALLER_VERSION = "0.7"
 DEFAULT_UPDATE_CHECK_URL = "https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"
 
 CONTROL_LABEL = "VYOS_AB"

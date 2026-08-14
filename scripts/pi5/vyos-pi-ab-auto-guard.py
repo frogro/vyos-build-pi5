@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import json
 import os
 from pathlib import Path
 import signal
@@ -49,6 +50,10 @@ EXPECTED_TIMEOUT = 15
 PING_INTERVAL = 5.0
 HEALTHCHECK_TIMEOUT = 90
 WATCHDOG_FALLBACK_GRACE = 10
+FINAL_REBOOT_NOTICE_SECONDS = 5
+UPDATE_STATE_NAME = "update-state.json"
+LOGIN_NOTICE_PATH = Path("/run/vyos-pi-ab-update-notice")
+PROFILE_NOTICE_HOOK = Path("/etc/profile.d/99-vyos-pi-ab-update-notice.sh")
 
 _watchdog_fd: int | None = None
 _ping_thread: threading.Thread | None = None
@@ -61,6 +66,57 @@ class ABError(RuntimeError):
 
 def log(message: str) -> None:
     print(message, flush=True)
+
+
+def announce(lines: list[str]) -> None:
+    """Log an update result and mirror it to the physical system console."""
+    text = "\n".join(lines).rstrip() + "\n"
+    for line in lines:
+        log(line)
+    try:
+        with Path("/dev/console").open("w", encoding="utf-8", errors="replace") as console:
+            console.write("\n" + text)
+            console.flush()
+    except OSError as exc:
+        log(f"WARNING: cannot write A/B update notice to /dev/console: {exc}")
+
+
+def running_version() -> str:
+    for path in (Path("/opt/vyatta/etc/version"), Path("/etc/version")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        first = text.splitlines()[0].strip()
+        if first.lower().startswith("version:"):
+            return first.split(":", 1)[1].strip()
+        return first
+    return "unknown"
+
+
+def install_login_notice(text: str) -> None:
+    """Expose the final result to interactive logins during this normal boot."""
+    LOGIN_NOTICE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOGIN_NOTICE_PATH.write_text(text.rstrip() + "\n", encoding="utf-8")
+    os.chmod(LOGIN_NOTICE_PATH, 0o644)
+
+    PROFILE_NOTICE_HOOK.parent.mkdir(parents=True, exist_ok=True)
+    PROFILE_NOTICE_HOOK.write_text(
+        "#!/bin/sh\n"
+        "case $- in\n"
+        "  *i*)\n"
+        "    if [ -r /run/vyos-pi-ab-update-notice ]; then\n"
+        "      printf '\\n'\n"
+        "      cat /run/vyos-pi-ab-update-notice\n"
+        "      printf '\\n'\n"
+        "    fi\n"
+        "    ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    os.chmod(PROFILE_NOTICE_HOOK, 0o644)
 
 
 def run(
@@ -141,6 +197,108 @@ def control_mount_readonly() -> Iterator[Path]:
             yield mountpoint
         finally:
             run("umount", str(mountpoint), check=False)
+
+
+@contextlib.contextmanager
+def control_mount_readwrite() -> Iterator[Path]:
+    device = device_for_label(CONTROL_LABEL)
+
+    existing = run("findmnt", "-rn", "-S", device, "-o", "TARGET,OPTIONS", check=False)
+    if existing.returncode == 0 and existing.stdout.strip():
+        fields = existing.stdout.splitlines()[0].split(None, 1)
+        if len(fields) == 2 and "rw" in fields[1].split(","):
+            yield Path(fields[0])
+            return
+
+    with tempfile.TemporaryDirectory(prefix="vyos-pi-ab-control-rw-", dir="/run") as temp_dir:
+        mountpoint = Path(temp_dir)
+        run("mount", "-o", "rw", device, str(mountpoint))
+        try:
+            yield mountpoint
+        finally:
+            run("umount", str(mountpoint), check=False)
+
+
+def read_update_state() -> dict[str, str] | None:
+    try:
+        with control_mount_readonly() as control:
+            path = control / UPDATE_STATE_NAME
+            if not path.is_file():
+                return None
+            value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log(f"WARNING: cannot read persistent A/B update state: {exc}")
+        return None
+    if not isinstance(value, dict):
+        log("WARNING: persistent A/B update state is not a JSON object")
+        return None
+    return {str(k): str(v) for k, v in value.items()}
+
+
+def write_update_state(**fields: str) -> None:
+    try:
+        with control_mount_readwrite() as control:
+            path = control / UPDATE_STATE_NAME
+            temp = control / f".{UPDATE_STATE_NAME}.tmp"
+            temp.write_text(json.dumps(fields, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            os.replace(temp, path)
+            os.sync()
+    except Exception as exc:
+        # User notification state must never weaken the boot/rollback safety path.
+        log(f"WARNING: cannot persist A/B update state: {exc}")
+
+
+def clear_update_state() -> None:
+    try:
+        with control_mount_readwrite() as control:
+            path = control / UPDATE_STATE_NAME
+            path.unlink(missing_ok=True)
+            os.sync()
+    except Exception as exc:
+        log(f"WARNING: cannot clear persistent A/B update state: {exc}")
+
+
+def publish_normal_boot_result(running_slot: str) -> None:
+    state = read_update_state()
+    if not state:
+        return
+
+    result = state.get("state", "")
+    image_version = state.get("image_version", "unknown")
+    test_slot = state.get("test_slot", "unknown")
+    rollback_slot = state.get("rollback_slot", "unknown")
+
+    if result == "committed" and test_slot == running_slot:
+        text = (
+            "Raspberry Pi A/B update: SUCCESS\n"
+            f"Image {image_version} passed validation and is now active in slot {running_slot}.\n"
+            "The final normal boot completed with tryboot=0. The update is fully activated."
+        )
+    elif result in {"testing", "failed"} and rollback_slot == running_slot:
+        detail = (
+            "failed a required health check"
+            if result == "failed"
+            else "did not complete validation successfully"
+        )
+        text = (
+            "WARNING: Raspberry Pi A/B update was rolled back.\n"
+            f"Image {image_version} in slot {test_slot} {detail} and was NOT activated.\n"
+            f"The system automatically returned to the previous working slot {running_slot}.\n"
+            "The new image may be faulty, incomplete, incompatible, or may have failed a system health check."
+        )
+    else:
+        log(
+            "Persistent A/B update state does not match this normal boot; "
+            f"leaving it in place for diagnosis: {state}"
+        )
+        return
+
+    try:
+        install_login_notice(text)
+    except OSError as exc:
+        log(f"WARNING: cannot install login A/B update notice: {exc}")
+    announce(text.splitlines())
+    clear_update_state()
 
 
 def parse_autoboot_text(text: str) -> tuple[str, str]:
@@ -374,16 +532,27 @@ def run_streamed(command: list[str]) -> int:
     return result.returncode
 
 
-def fail_into_watchdog_reset(timeout: int, old_default: str) -> int:
+def fail_into_watchdog_reset(timeout: int, old_default: str, test_slot: str, image_version: str) -> int:
     # Stop keepalives but intentionally keep the fd open. With nowayout=0,
     # closing it could stop the watchdog; we explicitly want expiry here.
     stop_keepalive_thread()
 
-    log("")
-    log("HEALTHCHECK FAILED: watchdog keepalive stopped.")
-    log(
-        f"Expected: hardware reset in about {timeout}s, then rollback to "
-        f"old default slot {old_default}."
+    write_update_state(
+        state="failed",
+        image_version=image_version,
+        test_slot=test_slot,
+        rollback_slot=old_default,
+        reason="healthcheck",
+    )
+    announce(
+        [
+            "",
+            "Raspberry Pi A/B update validation FAILED.",
+            f"Image {image_version} in slot {test_slot} did not pass the required health checks.",
+            "The new image was NOT activated and may be faulty, incomplete, or incompatible.",
+            f"The previous working slot {old_default} remains the default and will be restored automatically.",
+            f"The hardware watchdog should reset the system in about {timeout} seconds.",
+        ]
     )
 
     deadline = time.monotonic() + timeout + WATCHDOG_FALLBACK_GRACE
@@ -426,6 +595,7 @@ def main() -> int:
                 f"normal boot is running slot {running_slot}, but default is {default_slot}"
             )
         log("Normal/default boot detected; watchdog guard is not armed.")
+        publish_normal_boot_result(running_slot)
         return 0
 
     if tryboot_slot != running_slot:
@@ -437,6 +607,14 @@ def main() -> int:
         raise ABError(
             f"running slot {running_slot} is marked tryboot but is also the default"
         )
+
+    image_version = running_version()
+    write_update_state(
+        state="testing",
+        image_version=image_version,
+        test_slot=running_slot,
+        rollback_slot=default_slot,
+    )
 
     identity, timeout, nowayout = watchdog_preflight()
     log(f"Watchdog     : {identity}")
@@ -475,7 +653,7 @@ def main() -> int:
     )
 
     if health_rc != 0:
-        return fail_into_watchdog_reset(timeout, default_slot)
+        return fail_into_watchdog_reset(timeout, default_slot, running_slot, image_version)
 
     log("")
     log("Healthcheck passed. Disarming watchdog BEFORE changing the default slot.")
@@ -498,10 +676,23 @@ def main() -> int:
             f"tryboot={new_tryboot}"
         )
 
-    log("")
-    log(f"AUTO-GUARD SUCCESS: slot {running_slot} is healthy and now the default.")
-    log(f"Rollback slot      : {other_slot}")
-    log("Requesting one final normal reboot to leave Raspberry Pi tryboot mode.")
+    write_update_state(
+        state="committed",
+        image_version=image_version,
+        test_slot=running_slot,
+        rollback_slot=other_slot,
+    )
+    announce(
+        [
+            "",
+            "Raspberry Pi A/B update validation PASSED.",
+            f"Image {image_version} in slot {running_slot} passed all required health checks.",
+            f"Slot {running_slot} has been committed as the new default; slot {other_slot} remains the rollback slot.",
+            "One final normal reboot will complete activation with tryboot=0.",
+            f"Rebooting automatically in {FINAL_REBOOT_NOTICE_SECONDS} seconds...",
+        ]
+    )
+    time.sleep(FINAL_REBOOT_NOTICE_SECONDS)
     try:
         os.sync()
     except OSError:
@@ -514,7 +705,7 @@ def main() -> int:
             f"failed{': ' + detail if detail else ''}. Run sudo reboot manually."
         )
         return 0
-    log("Final normal reboot scheduled; the committed slot will boot with tryboot=0.")
+    log("Final normal reboot scheduled; the committed slot will boot with tryboot=0 and publish the success notice.")
     return 0
 
 

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 P="$ROOT/scripts/pi5"
+AUTO_NIGHTLY="$ROOT/.github/workflows/auto-vyos-pi-nightly.yml"
 
 for f in \
     "$P/inject-defaults.sh" \
@@ -64,9 +65,9 @@ grep -Fq 'raise SystemExit(130)' "$P/vyos-pi-image-dispatch.py"
 grep -Fq 'reboot normally once and retry' "$P/install-vyos-pi-ab-update.py"
 grep -Fq 'Reboot and test the new image now? [Y/n]' "$P/vyos-pi-image-dispatch.py"
 grep -Fq '["/sbin/reboot", "0 tryboot"]' "$P/vyos-pi-image-dispatch.py"
-grep -Fq 'Requesting one final normal reboot to leave Raspberry Pi tryboot mode.' "$P/vyos-pi-ab-auto-guard.py"
+grep -Fq 'One final normal reboot will complete activation with tryboot=0.' "$P/vyos-pi-ab-auto-guard.py"
 grep -Fq 'run("/usr/bin/systemctl", "--no-block", "reboot", check=False)' "$P/vyos-pi-ab-auto-guard.py"
-grep -Fq 'v0.6' "$P/install-vyos-pi-ab-update.py"
+grep -Fq 'v0.7' "$P/install-vyos-pi-ab-update.py"
 grep -Fq 'DEFAULT_UPDATE_CHECK_URL = "https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"' "$P/install-vyos-pi-ab-update.py"
 grep -Fq 'target_update_url = ensure_update_check_url(root / "config/config.boot")' "$P/install-vyos-pi-ab-update.py"
 grep -Fq 'ROOT-{slot} system update-check URL is missing' "$P/install-vyos-pi-ab-update.py"
@@ -79,6 +80,19 @@ grep -Fq "p.add_argument('--manual-baseline'" "$P/render-release-notes.py"
 grep -Fq "p.add_argument('--tag'" "$P/write-version-json.py"
 grep -Fq "TAG_RE = re.compile" "$P/write-version-json.py"
 grep -Fq 'Interactive A/B updates offer the test reboot automatically' "$P/update-changelog.py"
+grep -Fq 'Raspberry Pi A/B update validation PASSED.' "$P/vyos-pi-ab-auto-guard.py"
+grep -Fq 'Raspberry Pi A/B update validation FAILED.' "$P/vyos-pi-ab-auto-guard.py"
+grep -Fq 'UPDATE_STATE_NAME = "update-state.json"' "$P/vyos-pi-ab-auto-guard.py"
+grep -Fq 'publish_normal_boot_result(running_slot)' "$P/vyos-pi-ab-auto-guard.py"
+grep -Fq 'next normal login will show the final update result' "$P/vyos-pi-image-dispatch.py"
+grep -Fq 'REST-free upstream discovery: PASS' "$AUTO_NIGHTLY"
+grep -Fq 'https://raw.githubusercontent.com/vyos/vyos-nightly-build/rolling/version.json' "$AUTO_NIGHTLY"
+grep -Fq 'SIG_URL="${ISO_URL}.minisig"' "$AUTO_NIGHTLY"
+grep -Fq 'git ls-remote --symref https://github.com/vyos/vyos-build.git HEAD' "$AUTO_NIGHTLY"
+if grep -Fq 'api.github.com/repos/vyos/' "$AUTO_NIGHTLY"; then
+    echo "ERROR: auto-nightly still contains direct VyOS GitHub REST discovery calls" >&2
+    exit 1
+fi
 
 if grep -Fq 'fail "RPICFG partition changed during image build"' "$P/build-vyos-pi5-image.sh"; then
     echo "ERROR: old byte-identical RPICFG validation is still present" >&2

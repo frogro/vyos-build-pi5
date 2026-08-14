@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- A/B update UX v0.7 reports validation PASS/FAIL on the system console and persists the test result on the shared `VYOS_AB` partition so the next normal login can show either successful activation or automatic rollback.
+- Healthy test boots still commit and reboot automatically into `tryboot=0`; failed or hung test boots still return to the previous default without waiting for user input.
+- `auto-vyos-pi-nightly.yml` no longer depends on unauthenticated GitHub REST calls to `api.github.com` for VyOS discovery. It uses the official rolling `version.json`, signed release assets, and Git protocol commit resolution for abbreviated upstream SHAs.
 - A/B update UX v0.6 hides the Raspberry Pi `tryboot` command during the normal interactive update path: after a successful install the dispatcher offers to reboot into the test slot.
 - After a healthy tryboot is committed, the automatic guard requests one final normal reboot so the new default returns with `tryboot=0`; failed or hung test boots still roll back to the previous default slot.
 - A/B installer v0.6 now preserves a copied custom `system update-check url` and injects the project rolling metadata URL when the copied configuration has no update source; the runtime healthcheck refuses to commit a test slot if the update URL is missing from the loaded VyOS configuration.
