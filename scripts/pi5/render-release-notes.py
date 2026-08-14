@@ -52,15 +52,15 @@ Unofficial Raspberry Pi ARM64 build based directly on the corresponding official
 - Official release: {a.upstream_url}
 - Exact `vyos/vyos-build` commit: `{a.vyos_ref}`
 
-The VyOS userspace in this Raspberry Pi image is built from the exact source snapshot identified by this official Rolling release.
+The build uses the exact `vyos/vyos-build` commit identified by this official Rolling release. Critical VyOS userspace package versions are checked against the signed official AMD64 ISO, while the complete AMD64/ARM64 package-lock comparison is retained as diagnostic metadata.
 
 ## Official VyOS release notes
 
 {upstream}
 
-## Verified userspace parity
+## Verified critical userspace package parity
 
-Compared against the signed official VyOS AMD64 ISO:
+Strictly checked against the signed official VyOS AMD64 ISO:
 
 - FRR: `{a.frr_version}`
 - Podman: `{a.podman_version}`
@@ -76,6 +76,14 @@ Compared against the signed official VyOS AMD64 ISO:
 - A/B update bundle: `{update}`
 
 The Raspberry Pi-specific kernel, boot environment, Device Trees, kernel modules and firmware are supplied by the pinned Raspberry Pi hardware base.
+
+### Kernel note
+
+This Raspberry Pi build uses a platform-specific Raspberry Pi/Armbian kernel instead of the kernel shipped with the official VyOS amd64 image. Therefore, kernel-related changes listed in the official VyOS Rolling release notes are not necessarily applied through the same VyOS kernel patches or configuration.
+
+Some of these changes may already be present in the newer Raspberry Pi kernel, may be enabled through its kernel configuration, or may not be applicable to the Raspberry Pi platform at all. When a particular kernel feature or driver is important, its availability should be verified on the running system.
+
+If you notice a kernel feature from the corresponding official VyOS Rolling release that is missing on the Raspberry Pi build and is relevant to this platform, please open an issue or, preferably, submit a pull request.
 
 ## A/B layout
 
@@ -122,6 +130,7 @@ This build passed:
 - FRR package-version parity
 - Podman package-version parity
 - vyos-1x package-version parity
+- complete AMD64/ARM64 package-lock diagnostic comparison
 - pinned Raspberry Pi hardware-base SHA256 validation
 - Raspberry Pi kernel/module/DTB/firmware validation
 - A/B partition/layout validation

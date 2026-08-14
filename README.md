@@ -36,6 +36,13 @@ This repository provides an unofficial VyOS image for Raspberry Pi 4 and Raspber
 
 **Upstream attribution:** VyOS provides the routing userspace and configuration framework; Armbian provides the Raspberry Pi-compatible Linux kernel, modules, firmware, Device Trees, overlays, and boot integration; Raspberry Pi Ltd. designs and documents the Raspberry Pi hardware.
 
+> [!NOTE]
+> **Kernel note:** This Raspberry Pi build uses a platform-specific Raspberry Pi/Armbian kernel instead of the kernel shipped with the official VyOS amd64 image. Therefore, kernel-related changes listed in the official VyOS Rolling release notes are not necessarily applied through the same VyOS kernel patches or configuration.
+>
+> Some of these changes may already be present in the newer Raspberry Pi kernel, may be enabled through its kernel configuration, or may not be applicable to the Raspberry Pi platform at all. When a particular kernel feature or driver is important, its availability should be verified on the running system.
+>
+> If you notice a kernel feature from the corresponding official VyOS Rolling release that is missing on the Raspberry Pi build and is relevant to this platform, please open an issue or, preferably, submit a pull request.
+
 > [!WARNING]
 > This is an independent community project built from components provided by the **VyOS**, **Armbian**, and **Raspberry Pi** ecosystems. It is not produced, supported, sponsored, certified, or endorsed by the VyOS project, Sentrium S.L., Armbian, Armbian d.o.o., Raspberry Pi Ltd., or the Raspberry Pi Foundation. Rolling releases may contain regressions and should be tested before production use.
 

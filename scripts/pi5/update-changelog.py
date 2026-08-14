@@ -30,7 +30,7 @@ def main() -> int:
 - Synchronized to official VyOS Rolling `{a.version}`.
 - Official upstream release: {a.upstream_url}
 - Exact `vyos/vyos-build` commit: `{a.vyos_ref}`.
-- Verified userspace parity: FRR `{a.frr_version}`, Podman `{a.podman_version}`, vyos-1x `{a.vyos1x_version}`.
+- Verified critical userspace package parity: FRR `{a.frr_version}`, Podman `{a.podman_version}`, vyos-1x `{a.vyos1x_version}`.
 - Raspberry Pi hardware base: `{a.base_tag}`.
 - Raspberry Pi kernel: `{a.kernel}`.
 - Fresh-install `.img.xz` uses the production Raspberry Pi A/B partition layout.
