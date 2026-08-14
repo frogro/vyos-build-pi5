@@ -97,6 +97,8 @@ Fresh images are preconfigured to use this repository's `rolling/version.json` a
 
 Updates are written only to the inactive slot. On `reboot '0 tryboot'`, the automatic A/B guard arms the Raspberry Pi hardware watchdog and runs the VyOS health check. A healthy slot is committed as the new default. If the health check fails, the watchdog remains armed so the system resets and returns to the previous default slot.
 
+After a successful tryboot/auto-commit, perform one normal `sudo reboot` before installing another update. The installer intentionally accepts writes only from a normal/default boot (`tryboot=0`), keeping the previous slot as a known-good rollback target until the new default has also completed a normal boot.
+
 ## Automated validation
 
 This build passed:

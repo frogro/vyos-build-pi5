@@ -2,7 +2,7 @@
 """
 VyOS Raspberry Pi A/B update bundle validator and inactive-slot installer.
 
-v0.4 supports two explicit modes:
+v0.5 supports two explicit modes:
 
   --dry-run   Validate the bundle and print the exact A/B update plan.
   --install   Erase and rewrite ONLY the inactive A/B slot, preserving its
@@ -18,10 +18,15 @@ The new slot must pass the separate healthcheck before it is committed as the
 new default. If it hangs before commit, the hardware watchdog/tryboot design
 allows the old default slot to return.
 
-v0.4 installs the automatic tryboot watchdog guard and the `add system image`
-dispatcher from the bundle runtime payload. It accepts local bundles only.
-Publisher signatures and URL downloads are
-deliberately deferred until the local write path is hardware-tested.
+v0.5 installs the automatic tryboot watchdog guard and the `add system image`
+dispatcher from the bundle runtime payload. The installer itself accepts local
+bundles only; the dispatcher handles HTTP(S) and `latest` downloads before
+calling it. Publisher signatures are not yet implemented.
+
+For safety, an update may be written only from a normal/default boot. After a
+successful one-shot tryboot is health-checked and committed, perform one normal
+reboot before installing another update so the previous slot remains a known
+rollback target until the new default has also completed a normal boot.
 """
 
 from __future__ import annotations
@@ -37,6 +42,8 @@ import subprocess
 import sys
 import tempfile
 from typing import Iterator
+
+INSTALLER_VERSION = "0.5"
 
 CONTROL_LABEL = "VYOS_AB"
 BOOT_LABELS = {"A": "VYOS_BOOT_A", "B": "VYOS_BOOT_B"}
@@ -1515,14 +1522,15 @@ def main() -> int:
     bundle = Path(args.bundle).expanduser()
     if "://" in args.bundle:
         raise ABError(
-            "v0.4 accepts local bundle files only; URL download will be added later"
+            f"installer v{INSTALLER_VERSION} accepts local bundle files only; "
+            "use the add system image dispatcher for HTTP(S) or latest updates"
         )
     if not bundle.is_file():
         raise ABError(f"update bundle not found: {bundle}")
 
     check_unsaved_commits()
 
-    print("VyOS Raspberry Pi A/B update installer v0.4")
+    print(f"VyOS Raspberry Pi A/B update installer v{INSTALLER_VERSION}")
     print(f"Mode         : {'INSTALL inactive slot' if args.install else 'DRY RUN (read-only)'}")
     print(f"Bundle       : {bundle}")
     print()
@@ -1537,7 +1545,8 @@ def main() -> int:
     if dt_tryboot != 0:
         raise ABError(
             f"updates may only be installed from a normal/default boot; "
-            f"device-tree tryboot={dt_tryboot}"
+            f"device-tree tryboot={dt_tryboot}. If the test slot was already "
+            "committed, reboot normally once and retry"
         )
     if running_slot != default_slot:
         raise ABError(
@@ -1607,7 +1616,7 @@ def main() -> int:
         print()
         print("DRY RUN OK: no partitions or boot-control files were modified.")
         print(
-            "NOTE: v0.4 verifies SHA-256 integrity but does not yet provide a "
+            f"NOTE: v{INSTALLER_VERSION} verifies SHA-256 integrity but does not yet provide a "
             "cryptographic publisher signature."
         )
         return 0
@@ -1697,7 +1706,11 @@ def main() -> int:
         "hardware watchdog, run the healthcheck, and commit only if healthy."
     )
     print(
-        "NOTE: v0.4 verifies SHA-256 integrity but does not yet provide a "
+        "After a successful tryboot/auto-commit, reboot normally once before "
+        "installing another update."
+    )
+    print(
+        f"NOTE: v{INSTALLER_VERSION} verifies SHA-256 integrity but does not yet provide a "
         "cryptographic publisher signature."
     )
     return 0
@@ -1706,6 +1719,14 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nInstallation cancelled by user.", file=sys.stderr)
+        print(
+            "If cancellation happened after destructive confirmation, treat the "
+            "inactive slot as untrusted until it is rewritten or validated.",
+            file=sys.stderr,
+        )
+        raise SystemExit(130)
     except ABError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1)

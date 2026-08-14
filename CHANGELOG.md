@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Handle `Ctrl+C` in the Raspberry Pi A/B installer and image dispatcher without Python tracebacks; interrupted commands exit with status 130.
+- Keep the strict safety gate that permits A/B writes only from a normal/default boot (`tryboot=0`).
+- Document the required normal reboot after a successful tryboot/auto-commit before another update may overwrite the previous rollback slot.
+- Physical Raspberry Pi validation confirmed that the existing `2026.08.14-0025-rolling` public release resolves through `add system image latest`, downloads from GitHub Releases, verifies all A/B payload SHA-256 hashes, and reaches the native A/B installer.
+
 ## v2026.08.14-0025-rolling-rpi
 
 - Synchronized to official VyOS Rolling `2026.08.14-0025-rolling`.

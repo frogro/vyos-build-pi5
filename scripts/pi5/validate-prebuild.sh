@@ -49,6 +49,14 @@ grep -Fq 'boot_partition=2' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'boot_partition=3' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'vyos-pi-ab-auto-guard.service' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'vyos_pi_image_dispatch.py --action add' "$P/build-vyos-pi5-image.sh"
+grep -Fq 'except KeyboardInterrupt:' "$P/install-vyos-pi-ab-update.py"
+grep -Fq 'except KeyboardInterrupt:' "$P/vyos-pi-image-dispatch.py"
+grep -Fq 'raise SystemExit(130)' "$P/install-vyos-pi-ab-update.py"
+grep -Fq 'raise SystemExit(130)' "$P/vyos-pi-image-dispatch.py"
+grep -Fq 'reboot normally once and retry' "$P/install-vyos-pi-ab-update.py"
+grep -Fq 'reboot normally once before' "$P/install-vyos-pi-ab-update.py"
+grep -Fq 'perform one normal `sudo reboot` before installing another update' "$P/render-release-notes.py"
+grep -Fq 'perform one normal reboot before installing another update' "$P/update-changelog.py"
 
 if grep -Fq 'fail "RPICFG partition changed during image build"' "$P/build-vyos-pi5-image.sh"; then
     echo "ERROR: old byte-identical RPICFG validation is still present" >&2

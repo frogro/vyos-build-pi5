@@ -421,6 +421,9 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nUpdate cancelled by user.", file=sys.stderr)
+        raise SystemExit(130)
     except DispatchError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1)

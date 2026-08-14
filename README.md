@@ -16,6 +16,7 @@
 - [Features](#features)
 - [Quick Start](#quick-start)
 - [First Boot and Login](#first-boot-and-login)
+- [A/B System Updates](#ab-system-updates)
 - [Optional Helper Scripts](#optional-helper-scripts)
 - [Supported Hardware](#supported-hardware)
 - [Build from Source](#build-from-source)
@@ -185,6 +186,49 @@ The first-boot marker is:
 ```
 
 </details>
+
+---
+
+## A/B System Updates
+
+Current production images use two boot/root slots: A and B. Updates are written only to the inactive slot, while the currently running/default slot remains untouched as the rollback image.
+
+Check the current slot state:
+
+```bash
+sudo /usr/libexec/vyos/vyos-pi-ab-status.py
+```
+
+Fresh images are preconfigured to use this repository's `rolling/version.json` metadata for the latest Raspberry Pi A/B release. Install the latest published update with:
+
+```text
+add system image latest
+```
+
+Local `.tar.zst` bundles and direct HTTP(S) bundle URLs are supported as well. The installer verifies the bundle manifest and SHA-256 hashes before it offers to write the inactive slot.
+
+After an update has been written, test the new slot exactly once with:
+
+```bash
+sudo reboot '0 tryboot'
+```
+
+The automatic A/B guard arms the Raspberry Pi hardware watchdog, runs the health check, and commits the new slot as default only if the test boot is healthy. A failed or hung test boot leaves the previous default slot available for rollback.
+
+> [!IMPORTANT]
+> A new update is accepted only from a normal/default boot. After a successful `tryboot` has been committed by the automatic guard, perform one normal `sudo reboot` before installing another update. During the original test boot the Device Tree still reports `tryboot=1`, even after the new slot has been committed. Keeping this safety gate prevents the previous known-good rollback slot from being overwritten before the new default slot has also completed a normal boot.
+
+If `add system image latest` cannot resolve an update URL, verify the configured metadata source:
+
+```text
+show configuration commands | grep 'system update-check'
+```
+
+The expected production setting is:
+
+```text
+set system update-check url 'https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json'
+```
 
 ---
 

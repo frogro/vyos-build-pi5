@@ -36,6 +36,7 @@ def main() -> int:
 - Fresh-install `.img.xz` uses the production Raspberry Pi A/B partition layout.
 - Matching `update.tar.zst` is published for `add system image` local, HTTP(S), and `latest` updates.
 - A/B `tryboot`, automatic health-check/commit and hardware-watchdog rollback have been validated on physical Raspberry Pi hardware.
+- A/B updates are intentionally accepted only from a normal/default boot; after a successful tryboot/auto-commit, perform one normal reboot before installing another update.
 - Published automatically after A/B full-image and update-bundle QA.
 - See the linked official VyOS release for the upstream VyOS changes contained in this build.
 '''
