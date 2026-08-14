@@ -451,8 +451,32 @@ jobs:
             --upstream-notes-file upstream-release-body.md \
             --output RELEASE-NOTES.md
 
+          # Keep internal Actions artifact names stable for QA/reproducibility,
+          # but publish versioned user-facing assets following the VyOS naming style.
+          rm -rf release-assets
+          mkdir -p release-assets
+
+          cp "artifact/vyos-${VERSION}-rpi-arm64.img.xz" \
+            "release-assets/vyos-${VERSION}-rpi-arm64.img.xz"
+          cp "artifact/vyos-${VERSION}-rpi-arm64-update.tar.zst" \
+            "release-assets/vyos-${VERSION}-rpi-arm64-update.tar.zst"
+          cp artifact/SHA256SUMS \
+            release-assets/SHA256SUMS
+          cp artifact/BUILD-INFO.txt \
+            "release-assets/vyos-${VERSION}-rpi-arm64.build-info.txt"
+          cp artifact/manifest.json \
+            "release-assets/vyos-${VERSION}-rpi-arm64.manifest.json"
+          cp artifact/official-amd64-package-lock.tsv \
+            "release-assets/vyos-${VERSION}-generic-amd64.package-lock.tsv"
+          cp artifact/arm64-package-lock.tsv \
+            "release-assets/vyos-${VERSION}-rpi-arm64.package-lock.tsv"
+          cp artifact/package-parity-report.txt \
+            "release-assets/vyos-${VERSION}-rpi-arm64.package-parity.txt"
+          cp artifact/pi5-base-manifest.txt \
+            "release-assets/vyos-${VERSION}-rpi-arm64.hardware-base-manifest.txt"
+
           gh release create "$TAG" \
-            artifact/* \
+            release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$RPI_COMMIT" \
             --title "VyOS ${VERSION} for Raspberry Pi 4 / 5" \
