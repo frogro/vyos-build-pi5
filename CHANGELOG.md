@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Fix auto-nightly duplicate rebuilds of an already published Raspberry Pi version by restoring the repository-scoped `GITHUB_TOKEN` for the local release-existence check; upstream VyOS discovery remains REST-free.
 - A/B update UX v0.7 reports validation PASS/FAIL on the system console and persists the test result on the shared `VYOS_AB` partition so the next normal login can show either successful activation or automatic rollback.
 - Healthy test boots still commit and reboot automatically into `tryboot=0`; failed or hung test boots still return to the previous default without waiting for user input.
 - `auto-vyos-pi-nightly.yml` no longer depends on unauthenticated GitHub REST calls to `api.github.com` for VyOS discovery. It uses the official rolling `version.json`, signed release assets, and Git protocol commit resolution for abbreviated upstream SHAs.

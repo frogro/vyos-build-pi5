@@ -60,6 +60,9 @@ jobs:
         env:
           REQUESTED_VERSION: ${{ inputs.vyos_version }}
           FORCE_BUILD: ${{ inputs.force }}
+          # Used only for release-existence checks in this repository.
+          # Upstream VyOS discovery remains REST-free.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
