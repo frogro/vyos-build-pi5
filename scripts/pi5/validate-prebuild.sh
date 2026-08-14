@@ -13,6 +13,7 @@ for f in \
     "$P/merge-vyos-pi5.sh" \
     "$P/install-network-firmware.sh" \
     "$P/first-boot/dhcp-wan-ssh-setup.sh" \
+    "$P/first-boot/set-locales.sh" \
     "$P/first-boot/pi5-dhcp-wan-firstboot-wrapper.sh" \
     "$P/first-boot/ap-dhcp-wan-setup.sh"; do
     bash -n "$f"
@@ -41,6 +42,20 @@ grep -Fq 'PI5_VYATTACFG_REEXEC=1' "$P/first-boot/dhcp-wan-ssh-setup.sh"
 grep -Fq 'PI5_VYATTACFG_REEXEC=1' "$P/first-boot/ap-dhcp-wan-setup.sh"
 grep -Fq 'https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json' \
     "$P/first-boot/config.boot.default"
+grep -Fq 'UPDATE_CHECK_URL="https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"' \
+    "$P/first-boot/dhcp-wan-ssh-setup.sh"
+grep -Fq 'set system update-check url "$UPDATE_CHECK_URL"' \
+    "$P/first-boot/dhcp-wan-ssh-setup.sh"
+grep -Fq 'UPDATE_CHECK_URL="https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"' \
+    "$P/first-boot/set-locales.sh"
+grep -Fq 'set system update-check url "$UPDATE_CHECK_URL"' \
+    "$P/first-boot/set-locales.sh"
+grep -Fq 'UPDATE_CHECK_ALREADY_SET=0' \
+    "$P/first-boot/set-locales.sh"
+grep -Fq 'Raspberry Pi rolling/latest (already set)' \
+    "$P/first-boot/set-locales.sh"
+grep -Fq 'Raspberry Pi rolling/latest (will be set)' \
+    "$P/first-boot/set-locales.sh"
 grep -Fq 'UPDATE_CHECK_URL="${UPDATE_CHECK_URL:-https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json}"' \
     "$P/convert-vyos-rpi-image-to-ab.sh"
 grep -Fq 'ensure_update_check_url "$CONFIG_BOOT_OVERLAY" "$UPDATE_CHECK_URL"' \
@@ -92,6 +107,15 @@ grep -Fq 'official-package-lock.tsv' "$AUTO_NIGHTLY"
 grep -Fq 'package_lock_sha256=' "$AUTO_NIGHTLY"
 grep -Fq 'vyos-nightly-lock-${{ github.run_id }}' "$AUTO_NIGHTLY"
 grep -Fq 'GH_TOKEN: ${{ github.token }}' "$AUTO_NIGHTLY"
+grep -Fq 'LATEST_TAG=' "$AUTO_NIGHTLY"
+grep -Fq 'releases/latest' "$AUTO_NIGHTLY"
+grep -Fq 'UPDATE_ASSET="vyos-${VERSION}-rpi-arm64-update.tar.zst"' "$AUTO_NIGHTLY"
+grep -Fq -- '--tag "$TAG"' "$AUTO_NIGHTLY"
+grep -Fq 'EXPECTED_UPDATE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${UPDATE_ASSET}"' "$AUTO_NIGHTLY"
+if grep -Eq -- '-rpi-m([0-9]+)?/' "$ROOT/version.json"; then
+    echo "ERROR: production version.json points to a manual -rpi-m baseline" >&2
+    exit 1
+fi
 BUILD_WORKFLOW="$ROOT/.github/workflows/build-vyos-pi5.yml"
 grep -Fq 'Rebuild pinned VyOS core userspace package set' "$BUILD_WORKFLOW"
 grep -Fq 'pinned-vyos-1x-src' "$BUILD_WORKFLOW"

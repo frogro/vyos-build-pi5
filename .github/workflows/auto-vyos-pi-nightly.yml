@@ -487,6 +487,7 @@ jobs:
         if: ${{ github.ref == 'refs/heads/rolling' && steps.upstream.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.publish) }}
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.upstream.outputs.version }}
           VYOS_REF: ${{ steps.upstream.outputs.vyos_ref }}
           FRR_VERSION: ${{ steps.upstream.outputs.frr_version }}
@@ -501,6 +502,35 @@ jobs:
 
           KERNEL="$(jq -r '.kernel' artifact/manifest.json)"
           BASE_TAG="$(jq -r '.hardware_base_tag' artifact/manifest.json)"
+          TAG="v${VERSION}-rpi"
+          UPDATE_ASSET="vyos-${VERSION}-rpi-arm64-update.tar.zst"
+          EXPECTED_UPDATE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${UPDATE_ASSET}"
+
+          # `add system image latest` follows rolling/version.json, not GitHub's UI ordering.
+          # Only advance that pointer after GitHub itself reports this normal -rpi
+          # release as Latest and the expected public update asset is present.
+          LATEST_TAG=""
+          for ATTEMPT in 1 2 3 4 5 6; do
+            LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+            [ "$LATEST_TAG" = "$TAG" ] && break
+            echo "Waiting for GitHub Latest to become $TAG (attempt $ATTEMPT/6; currently ${LATEST_TAG:-unavailable})..."
+            sleep 5
+          done
+          if [ "$LATEST_TAG" != "$TAG" ]; then
+            echo "ERROR: GitHub Latest is ${LATEST_TAG:-unavailable}, expected $TAG; refusing to move version.json." >&2
+            exit 1
+          fi
+
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$UPDATE_ASSET"; then
+            echo "ERROR: release $TAG is missing expected update asset $UPDATE_ASSET" >&2
+            exit 1
+          fi
+
+          RELEASE_PUBLISHED="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt --jq '.publishedAt')"
+          if [ -z "$RELEASE_PUBLISHED" ] || [ "$RELEASE_PUBLISHED" = "null" ]; then
+            echo "ERROR: release $TAG has no publishedAt timestamp" >&2
+            exit 1
+          fi
 
           python3 scripts/pi5/update-changelog.py \
             --file CHANGELOG.md \
@@ -515,9 +545,16 @@ jobs:
 
           python3 scripts/pi5/write-version-json.py \
             --version "$VERSION" \
-            --timestamp "$UPSTREAM_PUBLISHED" \
+            --timestamp "$RELEASE_PUBLISHED" \
             --repository "$GITHUB_REPOSITORY" \
+            --tag "$TAG" \
             --output version.json
+
+          jq -e \
+            --arg version "$VERSION" \
+            --arg url "$EXPECTED_UPDATE_URL" \
+            'length == 1 and .[0].version == $version and .[0].url == $url' \
+            version.json >/dev/null
 
           if git diff --quiet -- CHANGELOG.md version.json; then
             echo "Changelog and version.json already current."

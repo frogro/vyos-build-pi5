@@ -6,6 +6,7 @@ set -o pipefail
 
 WIRED_IF="${WIRED_IF:-auto}"
 ROUTE_DISTANCE="${ROUTE_DISTANCE:-1}"
+UPDATE_CHECK_URL="https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"
 LOG="/config/dhcp-wan-ssh-setup.log"
 IFACE_FILE="/config/.dhcp-wan-interface"
 
@@ -80,6 +81,7 @@ printf '%s\n' "$WIRED_IF" > "$IFACE_FILE"
 chmod 600 "$IFACE_FILE"
 
 log "Detected: interface=$WIRED_IF MAC=$MAC DHCP route distance=$ROUTE_DISTANCE"
+log "Update channel: Raspberry Pi rolling/latest -> $UPDATE_CHECK_URL"
 
 sudo /sbin/ip link set "$WIRED_IF" up 2>/dev/null || true
 
@@ -93,6 +95,7 @@ set interfaces ethernet "$WIRED_IF" description 'WAN-LAN-DHCP'
 set interfaces ethernet "$WIRED_IF" address 'dhcp'
 set interfaces ethernet "$WIRED_IF" dhcp-options default-route-distance "$ROUTE_DISTANCE"
 set service ssh
+set system update-check url "$UPDATE_CHECK_URL"
 
 COMMIT_LOG="$(mktemp /tmp/dhcp-wan-commit.XXXXXX)" ||
     fail "Could not create temporary commit log"
