@@ -273,61 +273,61 @@ jobs:
 
           if [ -n "${OFFICIAL_PACKAGE_LOCK:-}" ] && [ -s "$OFFICIAL_PACKAGE_LOCK" ]; then
             python3 - "$OFFICIAL_PACKAGE_LOCK" arm64-package-lock.tsv package-parity-report.txt <<'PY_PACKAGE_PARITY'
-            from pathlib import Path
-            import sys
+          from pathlib import Path
+          import sys
 
-            official_path, arm_path, report_path = map(Path, sys.argv[1:])
+          official_path, arm_path, report_path = map(Path, sys.argv[1:])
 
-            def load(path):
-                result = {}
-                for raw in path.read_text(encoding='utf-8').splitlines():
-                    if not raw.strip():
-                        continue
-                    name, version, arch = raw.split('\t')
-                    result[name] = (version, arch)
-                return result
+          def load(path):
+              result = {}
+              for raw in path.read_text(encoding='utf-8').splitlines():
+                  if not raw.strip():
+                      continue
+                  name, version, arch = raw.split('\t')
+                  result[name] = (version, arch)
+              return result
 
-            official = load(official_path)
-            arm = load(arm_path)
-            shared = sorted(set(official) & set(arm))
+          official = load(official_path)
+          arm = load(arm_path)
+          shared = sorted(set(official) & set(arm))
 
-            # Compare the complete package intersection. Only packages that are
-            # intentionally tied to the architecture/kernel/hardware stack are
-            # excluded; those are replaced by the pinned Raspberry Pi base later.
-            def platform_specific(name):
-                return (
-                    name.startswith('linux-image-')
-                    or name.startswith('linux-headers-')
-                    or name.startswith('linux-tools-')
-                    or name.startswith('vyos-linux-')
-                    or name.startswith('vyos-intel-')
-                )
+          # Compare the complete package intersection. Only packages that are
+          # intentionally tied to the architecture/kernel/hardware stack are
+          # excluded; those are replaced by the pinned Raspberry Pi base later.
+          def platform_specific(name):
+              return (
+                  name.startswith('linux-image-')
+                  or name.startswith('linux-headers-')
+                  or name.startswith('linux-tools-')
+                  or name.startswith('vyos-linux-')
+                  or name.startswith('vyos-intel-')
+              )
 
-            checked = []
-            diffs = []
-            for name in shared:
-                if platform_specific(name):
-                    continue
-                ov, oa = official[name]
-                av, aa = arm[name]
-                checked.append(name)
-                if ov != av:
-                    diffs.append((name, ov, oa, av, aa))
+          checked = []
+          diffs = []
+          for name in shared:
+              if platform_specific(name):
+                  continue
+              ov, oa = official[name]
+              av, aa = arm[name]
+              checked.append(name)
+              if ov != av:
+                  diffs.append((name, ov, oa, av, aa))
 
-            lines = [
-                f'official_packages={len(official)}',
-                f'arm64_packages={len(arm)}',
-                f'shared_packages={len(shared)}',
-                f'checked_shared_packages={len(checked)}',
-                f'package_version_mismatches={len(diffs)}',
-            ]
-            for row in diffs:
-                lines.append('MISMATCH\t' + '\t'.join(row))
-            report_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-            print('\n'.join(lines))
-            if diffs:
-                raise SystemExit('ERROR: official Rolling vs ARM64 shared package parity mismatch')
-            PY_PACKAGE_PARITY
+          lines = [
+              f'official_packages={len(official)}',
+              f'arm64_packages={len(arm)}',
+              f'shared_packages={len(shared)}',
+              f'checked_shared_packages={len(checked)}',
+              f'package_version_mismatches={len(diffs)}',
+          ]
+          for row in diffs:
+              lines.append('MISMATCH\t' + '\t'.join(row))
+          report_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          print('\n'.join(lines))
+          if diffs:
+              raise SystemExit('ERROR: official Rolling vs ARM64 shared package parity mismatch')
+          PY_PACKAGE_PARITY
           fi
 
           [ -z "$EXPECTED_FRR" ] || test "$FRR_VERSION" = "$EXPECTED_FRR"
