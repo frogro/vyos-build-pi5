@@ -529,7 +529,7 @@ show_result() {
     echo "      payload/ab-runtime.tar"
 }
 
-echo "==> VyOS Raspberry Pi A/B update bundle builder v0.4"
+echo "==> VyOS Raspberry Pi A/B update bundle builder v0.5"
 echo "    Armbian base : $ARMBIAN_IMAGE"
 echo "    Merged rootfs: $MERGED_TAR"
 echo "    Output       : $OUT_BUNDLE"

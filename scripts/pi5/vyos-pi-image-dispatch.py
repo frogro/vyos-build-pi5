@@ -2,10 +2,11 @@
 """
 Dispatch `add system image` on VyOS Raspberry Pi A/B systems.
 
-Local or HTTP(S) Raspberry Pi A/B update bundles (*.tar.zst) are handed to
-install-vyos-pi-ab-update.py. Everything else is exec'd unchanged into the
-original VyOS op-mode image_installer.py, preserving normal ISO/URL/latest
-behavior.
+Local, HTTP(S), or `latest` Raspberry Pi A/B update bundles (*.tar.zst) are
+handed to install-vyos-pi-ab-update.py. For `latest`, the dispatcher reuses
+VyOS' existing latest-image-url.py resolver and configured `system update-check
+url`; no repository URL is hard-coded here. Everything else is exec'd unchanged
+into the original VyOS op-mode image_installer.py.
 
 The dispatcher performs only lightweight identification. Full bundle integrity,
 layout, architecture/flavor and A/B safety validation remains the job of
@@ -28,6 +29,7 @@ from vyos.remote import download
 ORIGINAL_INSTALLER = Path("/usr/libexec/vyos/op_mode/image_installer.py")
 AB_INSTALLER = Path("/usr/libexec/vyos/install-vyos-pi-ab-update.py")
 SIMPLE_DOWNLOAD = Path("/usr/libexec/vyos/simple-download.py")
+LATEST_IMAGE_URL = Path("/usr/libexec/vyos/latest-image-url.py")
 DT_BASE = Path("/proc/device-tree/chosen/bootloader")
 SUPPORTED_REMOTE_SCHEMES = {"http", "https"}
 
@@ -121,6 +123,53 @@ def configure_remote_credentials(username: str, password: str) -> None:
     # simple-download.py consume these environment variables implicitly.
     os.environ["REMOTE_USERNAME"] = username
     os.environ["REMOTE_PASSWORD"] = password
+
+
+def resolve_latest_image_url(
+    vrf: str | None,
+    username: str,
+    password: str,
+) -> str:
+    """Resolve `latest` using VyOS' configured system update-check URL."""
+    if not LATEST_IMAGE_URL.is_file():
+        raise DispatchError(
+            f"VyOS latest-image resolver is missing: {LATEST_IMAGE_URL}"
+        )
+
+    configure_remote_credentials(username, password)
+
+    command = [str(LATEST_IMAGE_URL)]
+    if vrf is not None:
+        command = ["ip", "vrf", "exec", vrf, *command]
+
+    result = subprocess.run(
+        command,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=os.environ.copy(),
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise DispatchError(
+            "could not resolve `latest` from system update-check URL"
+            + (f": {detail}" if detail else "")
+        )
+
+    resolved = result.stdout.strip()
+    if not resolved:
+        raise DispatchError(
+            "VyOS latest-image resolver returned an empty image URL"
+        )
+
+    parsed = urlparse(resolved)
+    if parsed.scheme.lower() not in SUPPORTED_REMOTE_SCHEMES:
+        raise DispatchError(
+            f"VyOS latest-image resolver returned unsupported URL: {resolved}"
+        )
+
+    return resolved
 
 
 def download_remote_bundle(
@@ -277,12 +326,9 @@ def parse_dispatch_args() -> tuple[argparse.Namespace, list[str]]:
 def main() -> int:
     args, unknown = parse_dispatch_args()
 
-    # Only intercept the op-mode `add` action. `install`, malformed invocations
-    # and `latest` retain upstream VyOS behavior.
+    # Only intercept the op-mode `add` action. Malformed invocations retain
+    # upstream VyOS behavior.
     if args.action != "add" or not args.image_path:
-        exec_original()
-
-    if args.image_path == "latest":
         exec_original()
 
     # Never change standard VyOS behavior outside our exact Raspberry Pi A/B
@@ -290,9 +336,29 @@ def main() -> int:
     if not is_raspberry_pi_ab_system():
         exec_original()
 
-    parsed = urlparse(args.image_path)
-    remote_candidate = is_remote_ab_candidate(args.image_path)
-    local_candidate = not parsed.scheme and args.image_path.lower().endswith(".tar.zst")
+    image_path = args.image_path
+    source_description = image_path
+
+    # Reuse the native VyOS "latest" resolver. If it points at our .tar.zst,
+    # continue through the A/B backend; if it points at a normal ISO, hand the
+    # original `latest` invocation back to upstream image_installer.py.
+    if image_path == "latest":
+        resolved = resolve_latest_image_url(
+            args.vrf,
+            args.username,
+            args.password,
+        )
+        if not is_remote_ab_candidate(resolved):
+            exec_original()
+        image_path = resolved
+        source_description = f"latest -> {resolved}"
+
+    parsed = urlparse(image_path)
+    remote_candidate = is_remote_ab_candidate(image_path)
+    local_candidate = (
+        not parsed.scheme
+        and image_path.lower().endswith(".tar.zst")
+    )
 
     # Non-A/B-looking paths retain upstream VyOS behavior, including normal
     # local/remote ISO images.
@@ -313,7 +379,7 @@ def main() -> int:
     if remote_candidate:
         try:
             downloaded_path = download_remote_bundle(
-                args.image_path,
+                image_path,
                 args.vrf,
                 args.username,
                 args.password,
@@ -321,7 +387,7 @@ def main() -> int:
             validate_ab_bundle(downloaded_path)
             return run_ab_installer(
                 downloaded_path,
-                source=args.image_path,
+                source=source_description,
                 no_prompt=args.no_prompt,
             )
         except DispatchError:
@@ -338,14 +404,16 @@ def main() -> int:
                 except FileNotFoundError:
                     pass
 
-    local_path = Path(args.image_path).expanduser()
+    local_path = Path(image_path).expanduser()
     if not local_path.is_file():
-        raise DispatchError(f"Raspberry Pi A/B update bundle not found: {local_path}")
+        raise DispatchError(
+            f"Raspberry Pi A/B update bundle not found: {local_path}"
+        )
 
     validate_ab_bundle(local_path)
     return run_ab_installer(
         local_path,
-        source=str(local_path),
+        source=source_description,
         no_prompt=args.no_prompt,
     )
 
