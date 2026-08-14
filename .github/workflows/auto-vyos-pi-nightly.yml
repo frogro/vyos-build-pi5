@@ -227,12 +227,22 @@ jobs:
               -W -f='${Version}' vyos-1x
           )"
 
+          dpkg-query \
+            --admindir="$PWD/official-dpkg" \
+            -W -f='${Package}\t${Version}\t${Architecture}\n' | \
+            LC_ALL=C sort -u > official-package-lock.tsv
+
+          PACKAGE_LOCK_SHA256="$(sha256sum official-package-lock.tsv | awk '{print $1}')"
+          PACKAGE_LOCK_COUNT="$(wc -l < official-package-lock.tsv | tr -d ' ')"
+
           echo "Official VyOS version: $VERSION"
           echo "Official build_git:    $BUILD_GIT"
           echo "Resolved full commit:  $VYOS_REF"
           echo "FRR:                   $FRR_VERSION"
           echo "Podman:                $PODMAN_VERSION"
           echo "vyos-1x:               $VYOS1X_VERSION"
+          echo "Locked packages:       $PACKAGE_LOCK_COUNT"
+          echo "Package lock SHA-256:  $PACKAGE_LOCK_SHA256"
           echo "Official ISO signature verification: PASS"
           echo "REST-free upstream discovery: PASS"
 
@@ -244,10 +254,23 @@ jobs:
             echo "frr_version=$FRR_VERSION"
             echo "podman_version=$PODMAN_VERSION"
             echo "vyos1x_version=$VYOS1X_VERSION"
+            echo "package_lock_sha256=$PACKAGE_LOCK_SHA256"
+            echo "package_lock_count=$PACKAGE_LOCK_COUNT"
             echo "upstream_name=$UPSTREAM_NAME"
             echo "upstream_published=$UPSTREAM_PUBLISHED"
             echo "upstream_release_url=$UPSTREAM_URL"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Upload official VyOS nightly package lock
+        if: steps.upstream.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: vyos-nightly-lock-${{ github.run_id }}
+          path: |
+            official-package-lock.tsv
+            upstream-vyos-version.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Dispatch pinned Raspberry Pi build
         id: build
@@ -260,6 +283,7 @@ jobs:
           FRR_VERSION: ${{ steps.upstream.outputs.frr_version }}
           PODMAN_VERSION: ${{ steps.upstream.outputs.podman_version }}
           VYOS1X_VERSION: ${{ steps.upstream.outputs.vyos1x_version }}
+          PACKAGE_LOCK_SHA256: ${{ steps.upstream.outputs.package_lock_sha256 }}
         run: |
           set -euo pipefail
 
@@ -273,7 +297,9 @@ jobs:
             -f vyos_version="$VERSION" \
             -f expected_frr_version="$FRR_VERSION" \
             -f expected_podman_version="$PODMAN_VERSION" \
-            -f expected_vyos1x_version="$VYOS1X_VERSION"
+            -f expected_vyos1x_version="$VYOS1X_VERSION" \
+            -f upstream_run_id="${{ github.run_id }}" \
+            -f expected_package_lock_sha256="$PACKAGE_LOCK_SHA256"
 
           RUN_ID=""
 

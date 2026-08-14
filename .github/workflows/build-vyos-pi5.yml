@@ -27,9 +27,20 @@ on:
         required: false
         default: ""
         type: string
+      upstream_run_id:
+        description: "Parent auto-nightly run containing the official package lock artifact"
+        required: false
+        default: ""
+        type: string
+      expected_package_lock_sha256:
+        description: "SHA-256 of the complete official amd64 package lock"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build-image:
@@ -48,6 +59,39 @@ jobs:
           ref: ${{ inputs.vyos_ref }}
           path: vyos-build
 
+      - name: Download official VyOS nightly package lock
+        if: inputs.upstream_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ inputs.upstream_run_id }}
+          EXPECTED_LOCK_SHA256: ${{ inputs.expected_package_lock_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p nightly-lock
+
+          ok=false
+          for _ in $(seq 1 12); do
+            if gh run download "$UPSTREAM_RUN_ID" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --name "vyos-nightly-lock-${UPSTREAM_RUN_ID}" \
+                 --dir nightly-lock; then
+              ok=true
+              break
+            fi
+            sleep 5
+          done
+          [ "$ok" = true ]
+
+          test -s nightly-lock/official-package-lock.tsv
+          ACTUAL_LOCK_SHA256="$(sha256sum nightly-lock/official-package-lock.tsv | awk '{print $1}')"
+          if [ -n "$EXPECTED_LOCK_SHA256" ]; then
+            test "$ACTUAL_LOCK_SHA256" = "$EXPECTED_LOCK_SHA256"
+          fi
+          echo "Official package lock SHA-256: $ACTUAL_LOCK_SHA256"
+          echo "OFFICIAL_PACKAGE_LOCK=$GITHUB_WORKSPACE/nightly-lock/official-package-lock.tsv" >> "$GITHUB_ENV"
+          echo "OFFICIAL_PACKAGE_LOCK_SHA256=$ACTUAL_LOCK_SHA256" >> "$GITHUB_ENV"
+
       - name: Install required tools
         run: |
           set -euo pipefail
@@ -65,6 +109,8 @@ jobs:
             zstd \
             curl \
             jq \
+            git \
+            dpkg-dev \
             python3
 
       - name: Validate Raspberry Pi repository
@@ -78,6 +124,73 @@ jobs:
           set -euo pipefail
           cd vyos-build/docker
           docker build -t vyos-build:rolling-arm64 .
+
+      - name: Rebuild pinned VyOS core userspace package set
+        if: inputs.expected_vyos1x_version != ''
+        shell: bash
+        env:
+          EXPECTED_VYOS1X: ${{ inputs.expected_vyos1x_version }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$EXPECTED_VYOS1X" =~ -g([0-9a-f]{7,40})$ ]]; then
+            echo "ERROR: cannot derive vyos-1x source commit from version: $EXPECTED_VYOS1X" >&2
+            exit 1
+          fi
+          COMMIT_HINT="${BASH_REMATCH[1]}"
+
+          rm -rf pinned-vyos-1x-src
+          git clone --recurse-submodules https://github.com/vyos/vyos-1x.git pinned-vyos-1x-src
+          git -C pinned-vyos-1x-src checkout --detach "$COMMIT_HINT"
+          git -C pinned-vyos-1x-src submodule update --init --recursive
+
+          RESOLVED_COMMIT="$(git -C pinned-vyos-1x-src rev-parse HEAD)"
+          [[ "$RESOLVED_COMMIT" == "$COMMIT_HINT"* ]]
+          echo "Pinned vyos-1x source commit: $RESOLVED_COMMIT"
+
+          mkdir -p vyos-build/packages
+          rm -f vyos-build/packages/vyos-1x_*.deb \
+                vyos-build/packages/vyos-user-utils_*.deb \
+                vyos-build/packages/vyos-1x-vmware_*.deb
+
+          docker run --rm --privileged \
+            --network host \
+            -e EXPECTED_VYOS1X="$EXPECTED_VYOS1X" \
+            -v "$GITHUB_WORKSPACE/pinned-vyos-1x-src":/src/vyos-1x \
+            -v "$GITHUB_WORKSPACE/vyos-build/packages":/out \
+            vyos-build:rolling-arm64 \
+            bash -lc '
+              set -euo pipefail
+              cd /src/vyos-1x
+              dpkg-buildpackage -uc -us -tc -b
+
+              copied=0
+              for deb in /src/*.deb; do
+                [ -f "$deb" ] || continue
+                pkg="$(dpkg-deb -f "$deb" Package)"
+                ver="$(dpkg-deb -f "$deb" Version)"
+                arch="$(dpkg-deb -f "$deb" Architecture)"
+                echo "Built package: $pkg $ver $arch"
+                if [ "$ver" = "$EXPECTED_VYOS1X" ] && { [ "$arch" = arm64 ] || [ "$arch" = all ]; }; then
+                  cp -v "$deb" /out/
+                  copied=$((copied + 1))
+                fi
+              done
+              test "$copied" -gt 0
+            '
+
+          FOUND_VYOS1X=false
+          for deb in vyos-build/packages/*.deb; do
+            [ -f "$deb" ] || continue
+            pkg="$(dpkg-deb -f "$deb" Package)"
+            ver="$(dpkg-deb -f "$deb" Version)"
+            arch="$(dpkg-deb -f "$deb" Architecture)"
+            echo "Pinned custom package: $pkg $ver $arch"
+            if [ "$pkg" = vyos-1x ] && [ "$ver" = "$EXPECTED_VYOS1X" ]; then
+              FOUND_VYOS1X=true
+            fi
+          done
+          [ "$FOUND_VYOS1X" = true ]
 
       - name: Build pinned VyOS Rolling ARM64 release image
         run: |
@@ -151,6 +264,70 @@ jobs:
           echo "FRR:     $FRR_VERSION"
           echo "Podman:  $PODMAN_VERSION"
           echo "vyos-1x: $VYOS1X_VERSION"
+
+          dpkg-query \
+            --admindir="$DPKG_ADM" \
+            -W -f='${Package}\t${Version}\t${Architecture}\n' | \
+            LC_ALL=C sort -u > arm64-package-lock.tsv
+
+          if [ -n "${OFFICIAL_PACKAGE_LOCK:-}" ] && [ -s "$OFFICIAL_PACKAGE_LOCK" ]; then
+            python3 - "$OFFICIAL_PACKAGE_LOCK" arm64-package-lock.tsv package-parity-report.txt <<'PY_PACKAGE_PARITY'
+            from pathlib import Path
+            import sys
+
+            official_path, arm_path, report_path = map(Path, sys.argv[1:])
+
+            def load(path):
+                result = {}
+                for raw in path.read_text(encoding='utf-8').splitlines():
+                    if not raw.strip():
+                        continue
+                    name, version, arch = raw.split('\t')
+                    result[name] = (version, arch)
+                return result
+
+            official = load(official_path)
+            arm = load(arm_path)
+            shared = sorted(set(official) & set(arm))
+
+            # Compare the complete package intersection. Only packages that are
+            # intentionally tied to the architecture/kernel/hardware stack are
+            # excluded; those are replaced by the pinned Raspberry Pi base later.
+            def platform_specific(name):
+                return (
+                    name.startswith('linux-image-')
+                    or name.startswith('linux-headers-')
+                    or name.startswith('linux-tools-')
+                    or name.startswith('vyos-linux-')
+                    or name.startswith('vyos-intel-')
+                )
+
+            checked = []
+            diffs = []
+            for name in shared:
+                if platform_specific(name):
+                    continue
+                ov, oa = official[name]
+                av, aa = arm[name]
+                checked.append(name)
+                if ov != av:
+                    diffs.append((name, ov, oa, av, aa))
+
+            lines = [
+                f'official_packages={len(official)}',
+                f'arm64_packages={len(arm)}',
+                f'shared_packages={len(shared)}',
+                f'checked_shared_packages={len(checked)}',
+                f'package_version_mismatches={len(diffs)}',
+            ]
+            for row in diffs:
+                lines.append('MISMATCH\t' + '\t'.join(row))
+            report_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+            print('\n'.join(lines))
+            if diffs:
+                raise SystemExit('ERROR: official Rolling vs ARM64 shared package parity mismatch')
+            PY_PACKAGE_PARITY
+          fi
 
           [ -z "$EXPECTED_FRR" ] || test "$FRR_VERSION" = "$EXPECTED_FRR"
           [ -z "$EXPECTED_PODMAN" ] || test "$PODMAN_VERSION" = "$EXPECTED_PODMAN"
@@ -322,6 +499,19 @@ jobs:
           sudo rm -f "$ARMBIAN_BASE_FILE"
           df -h /
 
+      - name: Preserve VyOS nightly package parity metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          test -s arm64-package-lock.tsv
+          cp arm64-package-lock.tsv "$GITHUB_WORKSPACE/output/arm64-package-lock.tsv"
+          if [ -n "${OFFICIAL_PACKAGE_LOCK:-}" ] && [ -s "$OFFICIAL_PACKAGE_LOCK" ]; then
+            cp "$OFFICIAL_PACKAGE_LOCK" "$GITHUB_WORKSPACE/output/official-amd64-package-lock.tsv"
+            test -s package-parity-report.txt
+            cp package-parity-report.txt "$GITHUB_WORKSPACE/output/package-parity-report.txt"
+          fi
+
       - name: Create Raspberry Pi A/B release metadata
         shell: bash
         run: |
@@ -450,6 +640,9 @@ jobs:
             output/BUILD-INFO.txt
             output/manifest.json
             output/pi5-base-manifest.txt
+            output/arm64-package-lock.tsv
+            output/official-amd64-package-lock.tsv
+            output/package-parity-report.txt
           retention-days: 7
           compression-level: 0
           if-no-files-found: error
