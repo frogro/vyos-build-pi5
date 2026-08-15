@@ -41,6 +41,10 @@ class ABError(RuntimeError):
     pass
 
 
+class ConfigNotReady(ABError):
+    """Running VyOS configuration has not finished loading yet."""
+
+
 def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
@@ -88,12 +92,12 @@ def check_update_metadata_config() -> str:
     try:
         config = ConfigTreeQuery()
         if not config.exists(path):
-            raise ABError("system update-check url is missing from the running configuration")
+            raise ConfigNotReady("system update-check url is missing from the running configuration")
         value = config.value(path)
-    except ABError:
+    except ConfigNotReady:
         raise
     except Exception as exc:
-        raise ABError(f"cannot read running system update-check url: {exc}") from exc
+        raise ConfigNotReady(f"cannot read running system update-check url: {exc}") from exc
 
     if not value or not str(value).startswith(("https://", "http://")):
         raise ABError(f"system update-check url is empty or invalid: {value!r}")
@@ -348,8 +352,7 @@ def unit_state(unit: str) -> str:
     return (result.stdout.strip() or "unknown").splitlines()[0]
 
 
-def wait_for_vyos(timeout: int, interval: float) -> None:
-    deadline = time.monotonic() + timeout
+def wait_for_vyos(deadline: float, timeout: int, interval: float) -> None:
     last_state = "unknown"
     last_units: dict[str, str] = {}
 
@@ -365,6 +368,24 @@ def wait_for_vyos(timeout: int, interval: float) -> None:
             raise ABError(
                 f"VyOS did not reach healthy systemd state within {timeout}s: "
                 f"system={last_state}; {unit_text}"
+            )
+
+        time.sleep(interval)
+
+
+def wait_for_update_metadata_config(deadline: float, timeout: int, interval: float) -> str:
+    last_error = "running configuration is not ready"
+
+    while True:
+        try:
+            return check_update_metadata_config()
+        except ConfigNotReady as exc:
+            last_error = str(exc)
+
+        if time.monotonic() >= deadline:
+            raise ABError(
+                f"system update-check url did not become available in the running configuration "
+                f"within the shared {timeout}s startup timeout: {last_error}"
             )
 
         time.sleep(interval)
@@ -452,10 +473,11 @@ def main() -> int:
         raise ABError("/config/config.boot is empty")
     ok(f"/config/config.boot exists and is non-empty ({config_size} bytes)")
 
-    wait_for_vyos(args.timeout, args.interval)
+    startup_deadline = time.monotonic() + args.timeout
+    wait_for_vyos(startup_deadline, args.timeout, args.interval)
     ok("systemd is running and core VyOS units are active")
 
-    update_url = check_update_metadata_config()
+    update_url = wait_for_update_metadata_config(startup_deadline, args.timeout, args.interval)
     ok(f"system update-check URL is loaded: {update_url}")
 
     _state, default_slot, tryboot_slot = read_autoboot_state()

@@ -34,14 +34,7 @@ DEFAULT_DNS1="1.1.1.1"
 DEFAULT_DNS2="9.9.9.9"
 DEFAULT_NTP1="time.cloudflare.com"
 DEFAULT_NTP2="time.google.com"
-UPDATE_CHECK_URL="https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"
 SYNC_TIMEOUT="${SYNC_TIMEOUT:-90}"
-
-UPDATE_CHECK_ALREADY_SET=0
-if /opt/vyatta/bin/vyatta-op-cmd-wrapper show configuration commands 2>/dev/null | \
-    grep -Fqx "set system update-check url '$UPDATE_CHECK_URL'"; then
-    UPDATE_CHECK_ALREADY_SET=1
-fi
 
 ask_default() {
     local prompt="$1" default="$2" answer=""
@@ -82,12 +75,6 @@ echo "Keyboard layout: $KEYBOARD_VALUE"
 echo "Wireless country: $WIFI_COUNTRY_VALUE"
 echo "DNS servers:     $DNS1, $DNS2"
 echo "NTP servers:     $NTP1, $NTP2"
-if [ "$UPDATE_CHECK_ALREADY_SET" -eq 1 ]; then
-    echo "Update channel:  Raspberry Pi rolling/latest (already set)"
-else
-    echo "Update channel:  Raspberry Pi rolling/latest (will be set)"
-fi
-echo "Update metadata: $UPDATE_CHECK_URL"
 echo
 
 if ! ask_yes_no 'Apply these settings?' 'y'; then
@@ -107,7 +94,6 @@ set system name-server "$DNS1" || CONFIG_FAILED=1
 set system name-server "$DNS2" || CONFIG_FAILED=1
 set service ntp server "$NTP1" || CONFIG_FAILED=1
 set service ntp server "$NTP2" || CONFIG_FAILED=1
-set system update-check url "$UPDATE_CHECK_URL" || CONFIG_FAILED=1
 
 if [ "$CONFIG_FAILED" -ne 0 ]; then
     echo 'ERROR: At least one configuration command failed.' >&2

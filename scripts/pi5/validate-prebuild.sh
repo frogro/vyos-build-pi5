@@ -46,16 +46,6 @@ grep -Fq 'UPDATE_CHECK_URL="https://raw.githubusercontent.com/frogro/vyos-build-
     "$P/first-boot/dhcp-wan-ssh-setup.sh"
 grep -Fq 'set system update-check url "$UPDATE_CHECK_URL"' \
     "$P/first-boot/dhcp-wan-ssh-setup.sh"
-grep -Fq 'UPDATE_CHECK_URL="https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json"' \
-    "$P/first-boot/set-locales.sh"
-grep -Fq 'set system update-check url "$UPDATE_CHECK_URL"' \
-    "$P/first-boot/set-locales.sh"
-grep -Fq 'UPDATE_CHECK_ALREADY_SET=0' \
-    "$P/first-boot/set-locales.sh"
-grep -Fq 'Raspberry Pi rolling/latest (already set)' \
-    "$P/first-boot/set-locales.sh"
-grep -Fq 'Raspberry Pi rolling/latest (will be set)' \
-    "$P/first-boot/set-locales.sh"
 grep -Fq 'UPDATE_CHECK_URL="${UPDATE_CHECK_URL:-https://raw.githubusercontent.com/frogro/vyos-build-pi5/rolling/version.json}"' \
     "$P/convert-vyos-rpi-image-to-ab.sh"
 grep -Fq 'ensure_update_check_url "$CONFIG_BOOT_OVERLAY" "$UPDATE_CHECK_URL"' \
@@ -89,6 +79,10 @@ grep -Fq 'DEFAULT_UPDATE_CHECK_URL = "https://raw.githubusercontent.com/frogro/v
 grep -Fq 'target_update_url = ensure_update_check_url(root / "config/config.boot")' "$P/install-vyos-pi-ab-update.py"
 grep -Fq 'ROOT-{slot} system update-check URL is missing' "$P/install-vyos-pi-ab-update.py"
 grep -Fq 'system update-check url is missing from the running configuration' "$P/vyos-pi-ab-healthcheck.py"
+grep -Fq 'class ConfigNotReady(ABError)' "$P/vyos-pi-ab-healthcheck.py"
+grep -Fq 'startup_deadline = time.monotonic() + args.timeout' "$P/vyos-pi-ab-healthcheck.py"
+grep -Fq 'wait_for_update_metadata_config(startup_deadline, args.timeout, args.interval)' "$P/vyos-pi-ab-healthcheck.py"
+grep -Fq 'within the shared {timeout}s startup timeout' "$P/vyos-pi-ab-healthcheck.py"
 grep -Fq 'system update-check URL missing' "$P/build-vyos-pi5-image.sh"
 grep -Fq 'merged rootfs system update-check URL is missing' "$P/build-vyos-pi-ab-update.sh"
 grep -Fq 'Reboot cancelled; the update remains installed in the inactive slot.' "$P/vyos-pi-image-dispatch.py"
