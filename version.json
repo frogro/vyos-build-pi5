@@ -1,7 +1,7 @@
 [
   {
-    "url": "https://github.com/frogro/vyos-build-pi5/releases/download/v2026.08.14-0025-rolling-rpi/vyos-2026.08.14-0025-rolling-rpi-arm64-update.tar.zst",
-    "version": "2026.08.14-0025-rolling",
-    "timestamp": "2026-08-15T06:46:20Z"
+    "url": "https://github.com/frogro/vyos-build-pi5/releases/download/v2026.08.18-1030-rolling-rpi/vyos-2026.08.18-1030-rolling-rpi-arm64-update.tar.zst",
+    "version": "2026.08.18-1030-rolling",
+    "timestamp": "2026-08-18T14:32:28Z"
   }
 ]
