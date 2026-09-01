@@ -1,5 +1,22 @@
 # Changelog
 
+## v2026.09.01-0034-rolling-rpi
+
+- Synchronized to official VyOS Rolling `2026.09.01-0034-rolling`.
+- Official upstream release: https://github.com/vyos/vyos-nightly-build/releases/tag/2026.09.01-0034-rolling
+- Exact `vyos/vyos-build` commit: `a0e175dc96016020b1e4b40cc6a50b66ef4dcf20`.
+- Verified critical userspace package parity: FRR `10.6.1-0`, Podman `5.8.4`, vyos-1x `999.0-14795-g2c269ef45`.
+- Raspberry Pi hardware base: `rpi-armbian-edge-7.1.8-vyos-parity`.
+- Raspberry Pi kernel: `7.1.8`.
+- Fresh-install `.img.xz` uses the production Raspberry Pi A/B partition layout.
+- Matching `update.tar.zst` is published for `add system image` local, HTTP(S), and `latest` updates.
+- A/B `tryboot`, automatic health-check/commit and hardware-watchdog rollback have been validated on physical Raspberry Pi hardware.
+- Interactive A/B updates offer the test reboot automatically; validation PASS/FAIL is reported on the system console, the final result is shown on the next normal login, and failed or hung test boots roll back automatically without waiting for user input.
+- Installer v0.7 preserves a copied custom update metadata URL, injects the Raspberry Pi rolling metadata URL when missing, and requires the running test slot to expose an update URL before commit.
+- Published automatically after A/B full-image and update-bundle QA.
+- See the linked official VyOS release for the upstream VyOS changes contained in this build.
+
+
 ## v2026.08.31-0032-rolling-rpi
 
 - Synchronized to official VyOS Rolling `2026.08.31-0032-rolling`.
